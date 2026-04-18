@@ -163,27 +163,22 @@ Good hosting options:
 - Vercel
 - Cloudflare Pages
 
-### Cloudflare Pages
+### Cloudflare Workers
 
-This repo is set up to work on Cloudflare Pages on Vite 6.
+If you connect this repo under Cloudflare's Worker build flow, the app should be deployed as static assets from `dist`, not as a starter Worker script.
 
 Use these Cloudflare dashboard settings:
 
-- Framework preset: `Vite`
 - Build command: `npm run build`
-- Build output directory: `dist`
+- Deploy command: `npx wrangler deploy`
 - Root directory: leave empty unless your repo is nested
-- Environment variable changes: none required for the current app
 
-For the simplest setup, let Pages publish the `dist/` output directly.
+The included [wrangler.toml](/Users/johnvincent/Org%20Chart%20Visualizer/wrangler.toml) configures Worker asset deployment:
 
-If you want to deploy from the CLI instead of Git integration, use the Pages command, not the Workers command:
+- `dist` is uploaded as static assets
+- SPA routing falls back correctly for client-side navigation
 
-```bash
-npx wrangler pages deploy dist
-```
-
-The included [wrangler.toml](/Users/johnvincent/Org%20Chart%20Visualizer/wrangler.toml) points Cloudflare Pages at `./dist`.
+If you prefer true Cloudflare Pages instead, create a Pages project rather than a Worker project.
 
 ### Publishing Safely
 
