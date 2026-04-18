@@ -165,7 +165,7 @@ Good hosting options:
 
 ### Cloudflare Pages
 
-This repo is set up to work on Cloudflare Pages while staying on Vite 5.
+This repo is set up to work on Cloudflare Pages on Vite 6.
 
 Use these Cloudflare dashboard settings:
 
@@ -175,18 +175,7 @@ Use these Cloudflare dashboard settings:
 - Root directory: leave empty unless your repo is nested
 - Environment variable changes: none required for the current app
 
-Important:
-
-- Do not set a deploy command like `npx wrangler deploy`
-- Do not use the generic Workers deploy flow for this repo
-
-Why:
-
-- this app is a static frontend
-- the Vite build already succeeds and produces `dist/`
-- the failure you saw comes from Wrangler trying to auto-configure a Worker/Vite deploy path that requires Vite 6+
-
-If Cloudflare currently has a deploy command configured, remove it and let Pages publish the built `dist/` output directly.
+For the simplest setup, let Pages publish the `dist/` output directly.
 
 If you want to deploy from the CLI instead of Git integration, use the Pages command, not the Workers command:
 
@@ -194,7 +183,7 @@ If you want to deploy from the CLI instead of Git integration, use the Pages com
 npx wrangler pages deploy dist
 ```
 
-The included [wrangler.toml](/Users/johnvincent/Org%20Chart%20Visualizer/wrangler.toml) is for the Pages workflow and points Cloudflare at `./dist`.
+The included [wrangler.toml](/Users/johnvincent/Org%20Chart%20Visualizer/wrangler.toml) points Cloudflare Pages at `./dist`.
 
 ### Publishing Safely
 
