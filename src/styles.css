@@ -537,11 +537,21 @@ h2 {
 }
 
 .person-card.is-drop-target {
-  border-color: rgba(36, 101, 68, 0.8);
+  border-color: rgba(72, 213, 137, 0.98);
   box-shadow:
-    0 0 0 2px rgba(36, 101, 68, 0.16),
-    0 10px 24px rgba(12, 28, 49, 0.11);
-  background: linear-gradient(180deg, rgba(246, 251, 248, 0.97), rgba(255, 255, 255, 0.94));
+    0 0 0 4px rgba(72, 213, 137, 0.34),
+    0 0 0 10px rgba(72, 213, 137, 0.12),
+    0 14px 34px rgba(12, 28, 49, 0.18);
+  background: linear-gradient(180deg, rgba(236, 255, 245, 0.99), rgba(248, 255, 251, 0.97));
+}
+
+.canvas-frame.is-org-view .person-card.is-drop-target,
+.canvas-frame.is-location-view .person-card.is-drop-target {
+  border-color: rgba(108, 240, 168, 1);
+  box-shadow:
+    0 0 0 4px rgba(108, 240, 168, 0.42),
+    0 0 0 12px rgba(108, 240, 168, 0.14),
+    0 16px 38px rgba(8, 22, 38, 0.34);
 }
 
 .person-card.is-invalid-target {

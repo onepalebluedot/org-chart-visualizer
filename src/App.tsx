@@ -502,10 +502,7 @@ export default function App() {
         !movingPerson ||
         !candidatePerson ||
         isDescendant(orgData.people, sourceId, candidate.id) ||
-        orgData.rootId === sourceId ||
-        candidatePerson.roleType === "ic" ||
-        candidatePerson.roleType === "open-role" ||
-        ((movingPerson.roleType === "ic" || movingPerson.roleType === "open-role") && candidatePerson.roleType !== "manager");
+        orgData.rootId === sourceId;
 
       if (invalid) {
         return { valid: null, invalid: candidate.id, reorder: null };

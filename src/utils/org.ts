@@ -483,8 +483,6 @@ export const normalizeOrgData = (data: OrgData): OrgData => {
     return data;
   }
 
-  const managerIds = data.people.filter((person) => person.roleType === "manager").map((person) => person.id);
-  const fallbackManagerId = managerIds[0] ?? root.id;
   const normalizedPeople: PersonRecord[] = data.people.map((person, index) => {
     if (person.id === root.id) {
       return {
@@ -501,10 +499,9 @@ export const normalizeOrgData = (data: OrgData): OrgData => {
     const parent = parentId ? byId[parentId] : null;
 
     if (!parent || parent.id === person.id) {
-      parentId = person.roleType === "manager" ? root.id : fallbackManagerId;
+      parentId = root.id;
     }
 
-    const resolvedParent = parentId ? byId[parentId] ?? root : root;
     const isManagerTrack = person.managerOrIc === "Manager";
     const normalizedRoleType =
       person.name.trim().toLowerCase() === "open role"
@@ -512,14 +509,6 @@ export const normalizeOrgData = (data: OrgData): OrgData => {
         : isManagerTrack
           ? "manager"
           : "ic";
-
-    if ((normalizedRoleType === "ic" || normalizedRoleType === "open-role") && resolvedParent.roleType !== "manager") {
-      parentId = fallbackManagerId;
-    }
-
-    if ((resolvedParent.roleType === "ic" || resolvedParent.roleType === "open-role") && resolvedParent.parentId) {
-      parentId = resolvedParent.parentId;
-    }
 
     return {
       ...person,
@@ -531,21 +520,9 @@ export const normalizeOrgData = (data: OrgData): OrgData => {
     };
   });
 
-  const normalizedChildren = childrenByParent(normalizedPeople);
-
   return {
     rootId: root.id,
-    people: normalizedPeople.map((person) => {
-      if ((person.roleType === "ic" || person.roleType === "open-role") && (normalizedChildren[person.id] ?? []).length > 0) {
-        return {
-          ...person,
-          managerOrIc: "Manager" as const,
-          roleType: "manager" as const
-        };
-      }
-
-      return person;
-    })
+    people: normalizedPeople
   };
 };
 
