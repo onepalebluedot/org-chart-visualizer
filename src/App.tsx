@@ -258,9 +258,47 @@ export default function App() {
       workerType: nextForm.workerType,
       title: nextForm.title,
       managerName: nextForm.managerName,
-      level: Number(nextForm.level) || selectedPerson.level,
       location: nextForm.location,
     });
+  };
+
+  const handleLevelInputChange = (value: string) => {
+    setFormState((current) => ({
+      ...current,
+      level: value
+    }));
+  };
+
+  const commitLevelInput = () => {
+    if (!selectedPerson) return;
+
+    const trimmed = formState.level.trim();
+
+    if (!trimmed) {
+      setFormState((current) => ({
+        ...current,
+        level: String(selectedPerson.level)
+      }));
+      return;
+    }
+
+    const nextLevel = Number(trimmed);
+    if (!Number.isFinite(nextLevel)) {
+      setFormState((current) => ({
+        ...current,
+        level: String(selectedPerson.level)
+      }));
+      return;
+    }
+
+    if (nextLevel !== selectedPerson.level) {
+      updatePerson(selectedPerson.id, { level: nextLevel });
+    } else {
+      setFormState((current) => ({
+        ...current,
+        level: String(nextLevel)
+      }));
+    }
   };
 
   const addPerson = (roleType: RoleType) => {
@@ -936,7 +974,9 @@ export default function App() {
                 <span>Level</span>
                 <input
                   value={formState.level}
-                  onChange={(event) => applyForm({ ...formState, level: event.target.value })}
+                  inputMode="numeric"
+                  onChange={(event) => handleLevelInputChange(event.target.value)}
+                  onBlur={commitLevelInput}
                 />
               </label>
               <label>
