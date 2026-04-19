@@ -136,6 +136,8 @@ export default function App() {
   const [interactionMode, setInteractionMode] = useState<InteractionMode>("view");
   const [cardDensity, setCardDensity] = useState<CardDensity>("standard");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [isMobileLayout, setIsMobileLayout] = useState(false);
+  const [mobilePanelOpen, setMobilePanelOpen] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(orgData.rootId);
   const [collapsedIds, setCollapsedIds] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState("");
@@ -219,6 +221,23 @@ export default function App() {
   useEffect(() => {
     setFormState(initialForm(selectedPerson));
   }, [selectedPerson]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const mediaQuery = window.matchMedia("(max-width: 980px)");
+    const syncLayout = () => setIsMobileLayout(mediaQuery.matches);
+    syncLayout();
+
+    mediaQuery.addEventListener("change", syncLayout);
+    return () => mediaQuery.removeEventListener("change", syncLayout);
+  }, []);
+
+  useEffect(() => {
+    if (!isMobileLayout) {
+      setMobilePanelOpen(false);
+    }
+  }, [isMobileLayout]);
 
   useEffect(() => {
     if (interactionMode === "drag") return;
@@ -491,6 +510,9 @@ export default function App() {
     if (node.type === "project") return;
     const personId = node.data.person.id;
     setSelectedId(personId);
+    if (isMobileLayout) {
+      setMobilePanelOpen(true);
+    }
   };
 
   const detectOrgDropTarget = (
@@ -707,15 +729,33 @@ export default function App() {
   const canRedo = redoStackRef.current.length > 0;
 
   return (
-    <div className={`app-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}>
-      <aside className={`sidebar ${sidebarCollapsed ? "is-collapsed" : ""}`}>
+    <div
+      className={`app-shell ${sidebarCollapsed && !isMobileLayout ? "sidebar-collapsed" : ""} ${
+        isMobileLayout ? "mobile-layout" : ""
+      }`}
+    >
+      {isMobileLayout && mobilePanelOpen ? <div className="mobile-backdrop" onClick={() => setMobilePanelOpen(false)} /> : null}
+      <aside
+        className={`sidebar ${sidebarCollapsed && !isMobileLayout ? "is-collapsed" : ""} ${isMobileLayout ? "is-mobile" : ""} ${
+          isMobileLayout && mobilePanelOpen ? "is-mobile-open" : ""
+        }`}
+      >
         <div className="sidebar-toggle-row">
-          <button className="sidebar-toggle" onClick={() => setSidebarCollapsed((current) => !current)}>
-            {sidebarCollapsed ? "Show panel" : "Hide panel"}
+          <button
+            className="sidebar-toggle"
+            onClick={() => {
+              if (isMobileLayout) {
+                setMobilePanelOpen((current) => !current);
+                return;
+              }
+              setSidebarCollapsed((current) => !current);
+            }}
+          >
+            {isMobileLayout ? (mobilePanelOpen ? "Close panel" : "Open panel") : sidebarCollapsed ? "Show panel" : "Hide panel"}
           </button>
         </div>
 
-        {sidebarCollapsed ? (
+        {sidebarCollapsed && !isMobileLayout ? (
           <div className="sidebar-collapsed-content">
             <div className="collapsed-brand">
               <span>OC</span>
@@ -1059,6 +1099,20 @@ export default function App() {
           <div>
             <p className="eyebrow">View</p>
             <h2>{viewMode === "org" ? "Reporting hierarchy" : "Location grouping"}</h2>
+            {isMobileLayout ? (
+              <div className="mobile-quick-actions">
+                <button onClick={() => setMobilePanelOpen(true)}>Panel</button>
+                <button onClick={() => setViewMode((current) => (current === "org" ? "location" : "org"))}>
+                  {viewMode === "org" ? "Location view" : "Org view"}
+                </button>
+                <button onClick={() => setInteractionMode((current) => (current === "view" ? "drag" : "view"))}>
+                  {isDragEditing ? "View mode" : "Drag edit"}
+                </button>
+                <button onClick={() => setCardDensity((current) => (current === "standard" ? "light" : "standard"))}>
+                  {isLightMode ? "Full cards" : "Light view"}
+                </button>
+              </div>
+            ) : null}
           </div>
           <div className="canvas-meta">
             <span>{orgData.people.length} roles</span>
@@ -1103,8 +1157,9 @@ export default function App() {
             nodesConnectable={false}
             elementsSelectable
             zoomOnScroll
+            zoomOnPinch
             panOnScroll={false}
-            panOnDrag={isDragEditing ? [1] : true}
+            panOnDrag={isDragEditing ? (isMobileLayout ? true : [1]) : true}
             selectionOnDrag={false}
             selectNodesOnDrag={false}
             nodeDragThreshold={1}
