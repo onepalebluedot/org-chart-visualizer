@@ -429,15 +429,16 @@ export default function App() {
 
   const addPerson = (roleType: RoleType) => {
     const parentId = selectedPerson?.id ?? orgData.rootId;
+    const parentName = selectedPerson?.name ?? "";
     const nextPerson = createEmptyPerson(parentId, roleType);
-    nextPerson.managerName = selectedPerson?.name ?? "";
+    nextPerson.managerName = parentName;
 
     captureViewportAnchor();
     commitOrgChange((current) => ({
       ...current,
       people: [...current.people, nextPerson]
     }));
-    setSelectedId(nextPerson.id);
+    setSelectedId(parentId);
     if (!canvasLocked) {
       setOrgFocusId(parentId ?? nextPerson.id);
       setExpandedIds(parentId ? new Set([parentId]) : new Set());
@@ -664,6 +665,7 @@ export default function App() {
       if (isLowestLevelTeamManager(personId)) {
         setExpandedIds((current) => new Set(current).add(personId));
       } else if (!hasDirectReports && parentId && isLowestLevelTeamManager(parentId)) {
+        setOrgFocusId(parentId);
         setExpandedIds((current) => new Set(current).add(parentId));
       } else {
         setOrgFocusId(personId);

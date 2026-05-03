@@ -412,23 +412,14 @@ const buildFocusedLaneOrgLayout = (data: OrgData, expandedIds: Set<string>, focu
   const layout = lightMode ? FOCUSED_LIGHT_LAYOUT : FOCUSED_STANDARD_LAYOUT;
   const byId = peopleById(data.people);
   const { childrenMap, focus, ancestors, peers } = getFocusParts(data, focusId);
-  const rows: PersonRecord[][] = [];
-  const rowSignatures = new Set<string>();
   const visibleIds = new Set<string>();
-  const leafStacks = new Map<string, PersonRecord[]>();
   const positions = new Map<string, LayoutNode>();
   const leafStep = layout.nodeHeight + layout.leafGap;
+  const blockGap = layout.columnGap;
 
-  const addRow = (peopleInRow: PersonRecord[]) => {
-    const row = peopleInRow.filter((person) => byId[person.id]);
-    if (row.length === 0) return;
-
-    const signature = row.map((person) => person.id).join("|");
-    if (rowSignatures.has(signature)) return;
-
-    rowSignatures.add(signature);
-    rows.push(row);
-    row.forEach((person) => visibleIds.add(person.id));
+  const markVisible = (person: PersonRecord, rowIndex: number) => {
+    if (!byId[person.id]) return;
+    visibleIds.add(person.id);
   };
 
   const peerRowFor = (person: PersonRecord): PersonRecord[] =>
@@ -436,85 +427,93 @@ const buildFocusedLaneOrgLayout = (data: OrgData, expandedIds: Set<string>, focu
       ? sortReports(childrenMap[person.parentId])
       : [person];
 
-  ancestors.forEach((ancestor) => addRow(peerRowFor(ancestor)));
-  addRow(peers.length > 0 ? peers : [focus]);
+  const usesCompactBranch = (reports: PersonRecord[]): boolean =>
+    reports.length > 0 && !reports.some((report) => expandedIds.has(report.id));
 
-  let cursor = 0;
-  while (cursor < rows.length) {
-    const row = rows[cursor];
-    cursor += 1;
+  const contextRows = [...ancestors.map(peerRowFor), peers.length > 0 ? peers : [focus]];
+  contextRows.forEach((row, rowIndex) => row.forEach((person) => markVisible(person, rowIndex)));
 
-    for (const person of row) {
-      if (!expandedIds.has(person.id)) continue;
+  const blockWidth = (person: PersonRecord, visited = new Set<string>()): number => {
+    if (visited.has(person.id) || !expandedIds.has(person.id)) return layout.nodeWidth;
+    visited.add(person.id);
 
-      const reports = sortReports(childrenMap[person.id] ?? []);
-      if (reports.length === 0) continue;
+    const reports = sortReports(childrenMap[person.id] ?? []);
+    if (reports.length === 0) return layout.nodeWidth;
 
-      const reportsAreLeaves = reports.every((report) => (childrenMap[report.id] ?? []).length === 0);
-      if (reportsAreLeaves) {
-        leafStacks.set(person.id, reports);
-        reports.forEach((report) => visibleIds.add(report.id));
-      } else {
-        addRow(reports);
-      }
-    }
-  }
+    if (usesCompactBranch(reports)) return Math.max(layout.nodeWidth, layout.nodeWidth * 2 + layout.branchColumnGap);
 
-  const branchFootprint = layout.nodeWidth * 2 + layout.branchColumnGap;
-  const itemWidth = (person: PersonRecord): number => (leafStacks.has(person.id) ? branchFootprint : layout.nodeWidth);
-  const rowWidth = (row: PersonRecord[]): number =>
-    row.reduce((total, person) => total + itemWidth(person), 0) + Math.max(0, row.length - 1) * layout.columnGap;
-  const maxRowWidth = Math.max(0, ...rows.map(rowWidth));
+    const childrenWidth =
+      reports.reduce((total, report) => total + blockWidth(report, new Set(visited)), 0) +
+      Math.max(0, reports.length - 1) * blockGap;
+    return Math.max(layout.nodeWidth, childrenWidth);
+  };
+
+  const contextRowWidth = (row: PersonRecord[]): number =>
+    row.reduce((total, person) => total + blockWidth(person), 0) + Math.max(0, row.length - 1) * blockGap;
+
+  const maxRowWidth = Math.max(0, ...contextRows.map(contextRowWidth));
   const centerX = layout.marginX + maxRowWidth / 2;
-  let currentY = layout.marginY;
+  const rowStep = layout.nodeHeight + layout.rowGap;
 
-  rows.forEach((row) => {
-    let cursorX = centerX - rowWidth(row) / 2;
-    let rowHeight = layout.nodeHeight;
+  const placeSubtree = (person: PersonRecord, x: number, rowIndex: number, visited = new Set<string>()) => {
+    if (visited.has(person.id)) return;
+    visited.add(person.id);
+    markVisible(person, rowIndex);
 
+    const width = blockWidth(person);
+    positions.set(person.id, {
+      id: person.id,
+      x: x + (width - layout.nodeWidth) / 2,
+      y: layout.marginY + rowIndex * rowStep
+    });
+
+    if (!expandedIds.has(person.id)) return;
+
+    const reports = sortReports(childrenMap[person.id] ?? []);
+    if (reports.length === 0) return;
+
+    const parentPosition = positions.get(person.id);
+    if (usesCompactBranch(reports) && parentPosition) {
+      const parentCenterX = parentPosition.x + layout.nodeWidth / 2;
+
+      reports.forEach((report, index) => {
+        const branchIndex = index % 2;
+        const leafRowIndex = Math.floor(index / 2);
+        const childX =
+          branchIndex === 0
+            ? parentCenterX - layout.branchColumnGap / 2 - layout.nodeWidth
+            : parentCenterX + layout.branchColumnGap / 2;
+
+        markVisible(report, rowIndex + 1 + leafRowIndex);
+        positions.set(report.id, {
+          id: report.id,
+          x: childX,
+          y: parentPosition.y + layout.nodeHeight + layout.branchVerticalGap + leafRowIndex * leafStep
+        });
+      });
+      return;
+    }
+
+    const childrenWidth =
+      reports.reduce((total, report) => total + blockWidth(report, new Set(visited)), 0) +
+      Math.max(0, reports.length - 1) * blockGap;
+    let childX = x + (width - childrenWidth) / 2;
+
+    reports.forEach((report) => {
+      const childWidth = blockWidth(report, new Set(visited));
+      placeSubtree(report, childX, rowIndex + 1, new Set(visited));
+      childX += childWidth + blockGap;
+    });
+  };
+
+  contextRows.forEach((row, rowIndex) => {
+    let cursorX = centerX - contextRowWidth(row) / 2;
     row.forEach((person) => {
-      const width = itemWidth(person);
-      positions.set(person.id, {
-        id: person.id,
-        x: cursorX + (width - layout.nodeWidth) / 2,
-        y: currentY
-      });
-
-      const stackedReports = leafStacks.get(person.id) ?? [];
-      if (stackedReports.length > 0) {
-        const branchLength = Math.ceil(stackedReports.length / 2);
-        rowHeight = Math.max(
-          rowHeight,
-          layout.nodeHeight + layout.branchVerticalGap + branchLength * leafStep - layout.leafGap
-        );
-      }
-
-      cursorX += width + layout.columnGap;
+      const width = blockWidth(person);
+      placeSubtree(person, cursorX, rowIndex);
+      cursorX += width + blockGap;
     });
-
-    currentY += rowHeight + layout.rowGap;
   });
-
-  for (const [parentId, reports] of leafStacks) {
-    const parentPosition = positions.get(parentId);
-    if (!parentPosition) continue;
-
-    const parentCenterX = parentPosition.x + layout.nodeWidth / 2;
-    reports.forEach((report, index) => {
-      const branchIndex = index % 2;
-      const rowIndex = Math.floor(index / 2);
-      const x =
-        branchIndex === 0
-          ? parentCenterX - layout.branchColumnGap / 2 - layout.nodeWidth
-          : parentCenterX + layout.branchColumnGap / 2;
-
-      positions.set(report.id, {
-        id: report.id,
-        x,
-        y: parentPosition.y + layout.nodeHeight + layout.branchVerticalGap + rowIndex * leafStep
-      });
-    });
-  }
 
   return [...visibleIds].flatMap((personId) => {
     const position = positions.get(personId);
@@ -776,12 +775,12 @@ export const buildOrgFlow = ({
       const childCenterX = childPosition ? childPosition.x + (lightMode ? FOCUSED_LIGHT_LAYOUT.nodeWidth : FOCUSED_STANDARD_LAYOUT.nodeWidth) / 2 : 0;
       const horizontalDelta = childCenterX - parentCenterX;
       const parentReports = childrenMap[person.parentId!] ?? [];
-      const isExpandedLowestLevelBranch =
+      const isCompactBranch =
         expandedIds.has(person.parentId!) &&
         parentReports.length > 0 &&
-        parentReports.every((report) => (childrenMap[report.id] ?? []).length === 0);
+        !parentReports.some((report) => expandedIds.has(report.id));
       const targetHandle =
-        isExpandedLowestLevelBranch && Math.abs(horizontalDelta) >= 40
+        isCompactBranch && Math.abs(horizontalDelta) >= 40
           ? horizontalDelta < 0
             ? "report-target-right"
             : "report-target-left"
