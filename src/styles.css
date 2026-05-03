@@ -396,14 +396,81 @@ h2 {
 }
 
 .canvas-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-end;
+  display: grid;
+  grid-template-columns: minmax(220px, 0.9fr) minmax(360px, 1.7fr) minmax(240px, 1fr);
+  gap: 0.9rem;
+  align-items: end;
   padding: 1rem 1.25rem;
   background: linear-gradient(180deg, rgba(244, 247, 251, 0.94), rgba(237, 242, 248, 0.9));
   border-radius: 24px;
   border: 1px solid rgba(255, 255, 255, 0.7);
   box-shadow: var(--shadow);
+}
+
+.canvas-title-block {
+  min-width: 0;
+}
+
+.top-edit-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.85rem;
+  justify-content: center;
+  align-items: stretch;
+}
+
+.top-edit-bar button,
+.canvas-history-controls button {
+  padding: 0.5rem 0.68rem;
+  border-radius: 999px;
+  font-size: 0.84rem;
+  background: rgba(255, 255, 255, 0.92);
+}
+
+.top-control-group {
+  display: grid;
+  align-content: start;
+  gap: 0.35rem;
+  padding: 0.45rem;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.5);
+  border: 1px solid rgba(147, 165, 184, 0.18);
+}
+
+.top-control-group > span {
+  font-size: 0.66rem;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--muted);
+  padding-left: 0.35rem;
+}
+
+.top-control-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.42rem;
+}
+
+.top-edit-bar .add-person-button {
+  color: #ffffff;
+  border-color: transparent;
+  background: linear-gradient(180deg, #256fc0 0%, #0f4f8a 100%);
+}
+
+.top-edit-bar .add-role-button {
+  color: #07345f;
+  border-color: rgba(74, 132, 194, 0.34);
+  background: linear-gradient(180deg, #dcecff 0%, #b9d7f7 100%);
+}
+
+.top-edit-bar .add-leader-button {
+  color: #ffffff;
+  border-color: transparent;
+  background: linear-gradient(180deg, #103e78 0%, #082d58 100%);
+}
+
+.structure-control-group {
+  min-width: 320px;
 }
 
 .canvas-meta {
@@ -536,6 +603,16 @@ h2 {
   display: flex;
   gap: 0.55rem;
   align-items: center;
+}
+
+.canvas-history-controls {
+  display: flex;
+  gap: 0.45rem;
+  padding: 0.35rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(147, 165, 184, 0.22);
+  box-shadow: 0 10px 22px rgba(12, 28, 49, 0.1);
 }
 
 .canvas-lock-button {
@@ -924,11 +1001,15 @@ h2 {
   }
 
   .canvas-header {
-    flex-direction: column;
+    grid-template-columns: 1fr;
     align-items: stretch;
     gap: 0.85rem;
     padding: 0.9rem 1rem;
     border-radius: 20px;
+  }
+
+  .top-edit-bar {
+    display: none;
   }
 
   .canvas-header h2 {

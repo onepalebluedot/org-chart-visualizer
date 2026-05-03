@@ -12,7 +12,9 @@ Single-page org chart editor built with React, TypeScript, Vite, and React Flow.
 - View mode and drag edit mode
 - Drag a card onto any valid visible person to reassign reporting
 - Drag a manager across sibling managers to reorder whole teams left/right
-- Focus-context collapse/expand controls
+- Top-bar add and structure controls for fast org editing
+- Canvas-level undo/redo controls
+- Explicit collapse/expand controls that do not trigger from normal card selection
 - Add leader action to insert a new root above the current top person
 - Search by name, role, title, manager/IC, level, worker type, or location
 - Side panel editing for the selected card
@@ -221,13 +223,15 @@ then the default Vite config is usually fine.
 - In `Org view`, selecting a card focuses the canvas around that person, their reporting chain, their peers, and their visible reports.
 - Lowest-level manager teams can remain open together for side-by-side comparison.
 - Clicking an IC in an expanded lowest-level team selects it without changing the team branch layout.
+- Clicking cards does not collapse other expanded branches; use `Collapse selected` or `Collapse all` when you want to close branches.
+- The top bar has separate `Add` controls for Person, Role, and Leader, plus structure controls for collapse/expand.
 - In `View mode`, the canvas is for browsing.
 - In `Drag edit`, left-drag edits cards and middle mouse drag pans the canvas.
 - In Org view, drag a person onto another visible card to update the reporting line; descendant loops and moving the root are blocked.
-- `Collapse all` keeps the reporting chain and focused peer row visible; `Expand all` expands the currently visible focus context.
+- `Collapse selected` toggles only the selected branch; `Collapse all` closes expanded branches; `Expand all` expands the current focus context.
 - `Add leader` creates a new top-level leader and moves the previous root underneath that leader.
 - In Location view, dragging a person into another location column updates that person’s `location`.
-- `Undo` and `Redo` step through edit history.
+- `Undo` and `Redo` are available directly on the canvas.
 - `Light view` compresses cards for high-density scanning.
 
 ## Architecture

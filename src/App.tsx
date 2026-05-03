@@ -669,7 +669,13 @@ export default function App() {
         setExpandedIds((current) => new Set(current).add(parentId));
       } else {
         setOrgFocusId(personId);
-        setExpandedIds(getDefaultFocusedExpandedIds(orgData, personId));
+        setExpandedIds((current) => {
+          const next = new Set(current);
+          if (hasDirectReports) {
+            next.add(personId);
+          }
+          return next;
+        });
       }
     }
     setSelectedId(personId);
@@ -855,10 +861,6 @@ export default function App() {
 
     captureViewportAnchor();
     setExpandedIds((current) => {
-      if (!isLowestLevelTeamManager(targetId)) {
-        return current.has(targetId) ? new Set() : new Set([targetId]);
-      }
-
       const next = new Set(current);
       if (next.has(targetId)) {
         next.delete(targetId);
@@ -907,6 +909,20 @@ export default function App() {
     collapseTargetId && canCollapseSelection && expandedIds.has(collapseTargetId) ? "Collapse selected" : "Expand selected";
   const canUndo = undoStackRef.current.length > 0;
   const canRedo = redoStackRef.current.length > 0;
+  const undoChange = () =>
+    setOrgData((current) => {
+      const previous = undoStackRef.current.pop();
+      if (!previous) return current;
+      redoStackRef.current.push(current);
+      return normalizeOrgData(previous);
+    });
+  const redoChange = () =>
+    setOrgData((current) => {
+      const next = redoStackRef.current.pop();
+      if (!next) return current;
+      undoStackRef.current.push(current);
+      return normalizeOrgData(next);
+    });
 
   return (
     <div
@@ -956,6 +972,83 @@ export default function App() {
           </p>
         </div>
 
+        <div className="sidebar-section selected-card-section">
+          <div className="section-title-row">
+            <h2>Selected card</h2>
+            {selectedPerson && selectedPerson.id !== orgData.rootId ? (
+              <button className="danger-link" onClick={deleteSelected}>
+                Remove
+              </button>
+            ) : null}
+          </div>
+          {selectedPerson ? (
+            <div className="editor-form">
+              <label>
+                <span>Name</span>
+                <input
+                  value={formState.name}
+                  onChange={(event) => applyForm({ ...formState, name: event.target.value })}
+                />
+              </label>
+              <label>
+                <span>Role</span>
+                <input
+                  value={formState.role}
+                  onChange={(event) => applyForm({ ...formState, role: event.target.value })}
+                />
+              </label>
+              <label>
+                <span>Manager or IC</span>
+                <select
+                  value={formState.managerOrIc}
+                  onChange={(event) =>
+                    applyForm({ ...formState, managerOrIc: event.target.value as PersonFormState["managerOrIc"] })
+                  }
+                >
+                  <option value="Manager">Manager</option>
+                  <option value="IC">IC</option>
+                </select>
+              </label>
+              <label>
+                <span>Full Time or Contractor</span>
+                <input
+                  value={formState.workerType}
+                  onChange={(event) => applyForm({ ...formState, workerType: event.target.value })}
+                />
+              </label>
+              <label>
+                <span>Title</span>
+                <input
+                  value={formState.title}
+                  onChange={(event) => applyForm({ ...formState, title: event.target.value })}
+                />
+              </label>
+              <label>
+                <span>Manager</span>
+                <input value={formState.managerName} readOnly />
+              </label>
+              <label>
+                <span>Level</span>
+                <input
+                  value={formState.level}
+                  inputMode="numeric"
+                  onChange={(event) => handleLevelInputChange(event.target.value)}
+                  onBlur={commitLevelInput}
+                />
+              </label>
+              <label>
+                <span>Location</span>
+                <input
+                  value={formState.location}
+                  onChange={(event) => applyForm({ ...formState, location: event.target.value })}
+                />
+              </label>
+            </div>
+          ) : (
+            <p className="muted">Select a person card to edit details.</p>
+          )}
+        </div>
+
         <div className="sidebar-section">
           <p className="section-kicker">Canvas</p>
           <div className="toolbar-grid">
@@ -982,53 +1075,6 @@ export default function App() {
             </button>
             <button onClick={() => setCardDensity("light")} className={cardDensity === "light" ? "selected-action" : ""}>
               Light view
-            </button>
-          </div>
-        </div>
-
-        <div className="sidebar-section">
-          <p className="section-kicker">Edit</p>
-          <div className="toolbar-grid">
-            <button onClick={addLeader}>Add leader</button>
-            <button onClick={() => addPerson("manager")}>Add manager</button>
-            <button onClick={() => addPerson("ic")}>Add IC</button>
-            <button onClick={() => addPerson("open-role")}>Add open role</button>
-            <button onClick={toggleCollapse} disabled={!canCollapseSelection}>
-              {collapseLabel}
-            </button>
-            <button onClick={collapseAll}>Collapse all</button>
-            <button onClick={expandAll}>Expand all</button>
-          </div>
-        </div>
-
-        <div className="sidebar-section">
-          <p className="section-kicker">History</p>
-          <div className="toolbar-grid">
-            <button
-              onClick={() =>
-                setOrgData((current) => {
-                  const previous = undoStackRef.current.pop();
-                  if (!previous) return current;
-                  redoStackRef.current.push(current);
-                  return normalizeOrgData(previous);
-                })
-              }
-              disabled={!canUndo}
-            >
-              Undo
-            </button>
-            <button
-              onClick={() =>
-                setOrgData((current) => {
-                  const next = redoStackRef.current.pop();
-                  if (!next) return current;
-                  undoStackRef.current.push(current);
-                  return normalizeOrgData(next);
-                })
-              }
-              disabled={!canRedo}
-            >
-              Redo
             </button>
           </div>
         </div>
@@ -1137,103 +1183,6 @@ export default function App() {
         </div>
 
         <div className="sidebar-section">
-          <div className="section-title-row">
-            <h2>Selected card</h2>
-            {selectedPerson && selectedPerson.id !== orgData.rootId ? (
-              <button className="danger-link" onClick={deleteSelected}>
-                Remove
-              </button>
-            ) : null}
-          </div>
-          {selectedPerson ? (
-            <div className="editor-form">
-              <label>
-                <span>Name</span>
-                <input
-                  value={formState.name}
-                  onChange={(event) => applyForm({ ...formState, name: event.target.value })}
-                />
-              </label>
-              <label>
-                <span>Role</span>
-                <input
-                  value={formState.role}
-                  onChange={(event) => applyForm({ ...formState, role: event.target.value })}
-                />
-              </label>
-              <label>
-                <span>Manager or IC</span>
-                <select
-                  value={formState.managerOrIc}
-                  onChange={(event) =>
-                    applyForm({ ...formState, managerOrIc: event.target.value as PersonFormState["managerOrIc"] })
-                  }
-                >
-                  <option value="Manager">Manager</option>
-                  <option value="IC">IC</option>
-                </select>
-              </label>
-              <label>
-                <span>Full Time or Contractor</span>
-                <input
-                  value={formState.workerType}
-                  onChange={(event) => applyForm({ ...formState, workerType: event.target.value })}
-                />
-              </label>
-              <label>
-                <span>Title</span>
-                <input
-                  value={formState.title}
-                  onChange={(event) => applyForm({ ...formState, title: event.target.value })}
-                />
-              </label>
-              <label>
-                <span>Manager</span>
-                <input value={formState.managerName} readOnly />
-              </label>
-              <label>
-                <span>Level</span>
-                <input
-                  value={formState.level}
-                  inputMode="numeric"
-                  onChange={(event) => handleLevelInputChange(event.target.value)}
-                  onBlur={commitLevelInput}
-                />
-              </label>
-              <label>
-                <span>Location</span>
-                <input
-                  value={formState.location}
-                  onChange={(event) => applyForm({ ...formState, location: event.target.value })}
-                />
-              </label>
-            </div>
-          ) : (
-            <p className="muted">Select a person card to edit details.</p>
-          )}
-        </div>
-
-        <div className="sidebar-section legend">
-          <h2>Legend</h2>
-          <div className="legend-item">
-            <span className="legend-swatch executive" />
-            <span>Executive</span>
-          </div>
-          <div className="legend-item">
-            <span className="legend-swatch manager" />
-            <span>Manager</span>
-          </div>
-          <div className="legend-item">
-            <span className="legend-swatch ic" />
-            <span>IC</span>
-          </div>
-          <div className="legend-item">
-            <span className="legend-swatch open-role" />
-            <span>Open role</span>
-          </div>
-        </div>
-
-        <div className="sidebar-section">
           <h2>Locations</h2>
           <div className="project-list">
             {locationSummary.map(([location, count]) => (
@@ -1277,7 +1226,7 @@ export default function App() {
 
       <main className="canvas-shell">
         <div className="canvas-header">
-          <div>
+          <div className="canvas-title-block">
             <p className="eyebrow">View</p>
             <h2>{viewMode === "org" ? "Reporting hierarchy" : "Location grouping"}</h2>
             {isMobileLayout ? (
@@ -1295,6 +1244,34 @@ export default function App() {
               </div>
             ) : null}
           </div>
+          {!isMobileLayout ? (
+            <div className="top-edit-bar" aria-label="Edit controls">
+              <div className="top-control-group add-control-group">
+                <span>Add</span>
+                <div className="top-control-buttons">
+                  <button className="add-person-button" onClick={() => addPerson("ic")}>
+                    Person
+                  </button>
+                  <button className="add-role-button" onClick={() => addPerson("open-role")}>
+                    Role
+                  </button>
+                  <button className="add-leader-button" onClick={addLeader}>
+                    Leader
+                  </button>
+                </div>
+              </div>
+              <div className="top-control-group structure-control-group">
+                <span>Structure</span>
+                <div className="top-control-buttons">
+                  <button onClick={toggleCollapse} disabled={!canCollapseSelection}>
+                    {collapseLabel}
+                  </button>
+                  <button onClick={collapseAll}>Collapse all</button>
+                  <button onClick={expandAll}>Expand all</button>
+                </div>
+              </div>
+            </div>
+          ) : null}
           <div className="canvas-meta">
             <span>
               {roleSummary.managers} managers · {roleSummary.individualContributors} IC · {roleSummary.openRoles} open
@@ -1364,6 +1341,16 @@ export default function App() {
                   {viewMode === "org" ? "Hierarchy view" : "Location view"} · {isDragEditing ? "Drag edit" : "View"}
                   {viewMode === "org" && canvasLocked ? " · Locked" : ""}
                 </div>
+              </div>
+            </Panel>
+            <Panel position="bottom-left">
+              <div className="canvas-history-controls" aria-label="History controls">
+                <button onClick={undoChange} disabled={!canUndo} type="button">
+                  Undo
+                </button>
+                <button onClick={redoChange} disabled={!canRedo} type="button">
+                  Redo
+                </button>
               </div>
             </Panel>
             <Background
