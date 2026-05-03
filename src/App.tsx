@@ -1,15 +1,20 @@
 import {
   Background,
   BackgroundVariant,
+  BaseEdge,
+  Handle,
   Panel,
+  Position,
   ReactFlow,
   getViewportForBounds,
+  getSmoothStepPath,
+  type EdgeProps,
   type OnNodeDrag,
   type ReactFlowInstance,
   type XYPosition
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import mockOrgData from "./data/mockOrg";
 import type { OrgData, PersonFormState, PersonRecord, RoleType, ViewMode } from "./types";
 import {
@@ -19,13 +24,14 @@ import {
   childrenByParent,
   createEmptyPerson,
   filterPeople,
+  getDefaultFocusedExpandedIds,
+  getFocusedExpandableIds,
   isDescendant,
   normalizeOrgData,
   parseOrgData,
   reparentPerson,
   reorderSiblings,
-  serializeOrgData,
-  toggleCollapseForAll
+  serializeOrgData
 } from "./utils/org";
 import type { AppNode, OrgNodeData, SpreadsheetImportPreview } from "./utils/org";
 
@@ -34,6 +40,12 @@ const roleLabels: Record<RoleType, string> = {
   manager: "Manager",
   ic: "Individual contributor",
   "open-role": "Open role"
+};
+
+const getInitials = (name: string): string => {
+  if (name.toLowerCase() === "open role") return "+";
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  return (parts[0]?.[0] ?? "").concat(parts[1]?.[0] ?? "").toUpperCase() || "?";
 };
 
 const initialForm = (person: PersonRecord | null): PersonFormState => ({
@@ -52,6 +64,10 @@ const nodeTypes = {
   project: LocationNode
 };
 
+const edgeTypes = {
+  reporting: ReportingEdge
+};
+
 type InteractionMode = "view" | "drag";
 type CardDensity = "standard" | "light";
 type ImportMessageTone = "error" | "success";
@@ -62,29 +78,20 @@ interface PendingSpreadsheetImport {
   preview: SpreadsheetImportPreview;
 }
 
-const CANVAS_PADDING = 220;
+interface ViewportAnchor {
+  nodeId: string;
+  screenPosition: XYPosition;
+}
+
 const STANDARD_PERSON_CARD_WIDTH = 260;
-const STANDARD_PERSON_CARD_HEIGHT = 138;
+const STANDARD_PERSON_CARD_HEIGHT = 104;
 const LIGHT_PERSON_CARD_WIDTH = 168;
-const LIGHT_PERSON_CARD_HEIGHT = 46;
+const LIGHT_PERSON_CARD_HEIGHT = 42;
 const GROUP_CARD_HEIGHT = 76;
 const LOCATION_COLUMN_START_X = 120;
 const GRID_SIZE = 20;
 const EXPORT_WIDTH = 1600;
 const EXPORT_HEIGHT = 900;
-
-const getCanvasExtent = (
-  nodes: AppNode[],
-  personCardWidth: number,
-  personCardHeight: number
-): [[number, number], [number, number]] => {
-  const bounds = getCanvasBounds(nodes, personCardWidth, personCardHeight, CANVAS_PADDING, CANVAS_PADDING * 0.65);
-
-  return [
-    [bounds.x, bounds.y],
-    [bounds.x + bounds.width, bounds.y + bounds.height]
-  ];
-};
 
 const getCanvasBounds = (
   nodes: AppNode[],
@@ -104,8 +111,18 @@ const getCanvasBounds = (
 
   const bounds = nodes.reduce(
     (acc, node) => {
-      const width = node.type === "project" ? STANDARD_PERSON_CARD_WIDTH : personCardWidth;
-      const height = node.type === "project" ? GROUP_CARD_HEIGHT : personCardHeight;
+      const width =
+        typeof node.style?.width === "number"
+          ? node.style.width
+          : node.type === "project"
+            ? STANDARD_PERSON_CARD_WIDTH
+            : personCardWidth;
+      const height =
+        typeof node.style?.height === "number"
+          ? node.style.height
+          : node.type === "project"
+            ? GROUP_CARD_HEIGHT
+            : personCardHeight;
 
       return {
         minX: Math.min(acc.minX, node.position.x),
@@ -139,7 +156,9 @@ export default function App() {
   const [isMobileLayout, setIsMobileLayout] = useState(false);
   const [mobilePanelOpen, setMobilePanelOpen] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(orgData.rootId);
-  const [collapsedIds, setCollapsedIds] = useState<Set<string>>(new Set());
+  const [orgFocusId, setOrgFocusId] = useState<string | null>(orgData.rootId);
+  const [canvasLocked, setCanvasLocked] = useState(false);
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set([orgData.rootId]));
   const [search, setSearch] = useState("");
   const [orgPreviewPositions, setOrgPreviewPositions] = useState<Record<string, XYPosition>>({});
   const [locationPreviewPositions, setLocationPreviewPositions] = useState<Record<string, XYPosition>>({});
@@ -156,6 +175,7 @@ export default function App() {
   const spreadsheetFileInputRef = useRef<HTMLInputElement | null>(null);
   const canvasFrameRef = useRef<HTMLDivElement | null>(null);
   const reactFlowInstanceRef = useRef<ReactFlowInstance<AppNode> | null>(null);
+  const pendingViewportAnchorRef = useRef<ViewportAnchor | null>(null);
   const undoStackRef = useRef<OrgData[]>([]);
   const redoStackRef = useRef<OrgData[]>([]);
   const isLightMode = cardDensity === "light";
@@ -173,14 +193,15 @@ export default function App() {
     () =>
       buildOrgFlow({
         data: orgData,
-        collapsedIds,
+        expandedIds,
         selectedId,
+        focusId: orgFocusId,
         dropTargetId: reorderTarget ? null : dropTargetId,
         invalidTargetId,
         previewPositions: orgPreviewPositions,
         lightMode: isLightMode
       }),
-    [collapsedIds, dropTargetId, invalidTargetId, isLightMode, orgData, orgPreviewPositions, reorderTarget, selectedId]
+    [dropTargetId, expandedIds, invalidTargetId, isLightMode, orgData, orgFocusId, orgPreviewPositions, reorderTarget, selectedId]
   );
   const locationFlow = useMemo(
     () =>
@@ -217,6 +238,92 @@ export default function App() {
     () => locationFlow.edges.filter((edge) => visibleLocationNodeIds.has(edge.source) && visibleLocationNodeIds.has(edge.target)),
     [locationFlow.edges, visibleLocationNodeIds]
   );
+  const roleSummary = useMemo(() => {
+    const managers = orgData.people.filter((person) => person.managerOrIc === "Manager" && person.roleType !== "open-role").length;
+    const openRoles = orgData.people.filter((person) => person.roleType === "open-role").length;
+    const individualContributors = orgData.people.length - managers - openRoles;
+
+    return {
+      managers,
+      individualContributors,
+      openRoles
+    };
+  }, [orgData.people]);
+  const orgChildrenMap = useMemo(() => childrenByParent(orgData.people), [orgData.people]);
+  const isLowestLevelTeamManager = (personId: string): boolean => {
+    const reports = orgChildrenMap[personId] ?? [];
+    return reports.length > 0 && reports.every((report) => (orgChildrenMap[report.id] ?? []).length === 0);
+  };
+
+  const captureViewportAnchor = () => {
+    if (viewMode !== "org") return;
+    const instance = reactFlowInstanceRef.current;
+    const canvas = canvasFrameRef.current;
+    if (!instance || !canvas || visibleOrgNodes.length === 0) return;
+
+    const canvasRect = canvas.getBoundingClientRect();
+    const candidates = visibleOrgNodes
+      .filter((node) => node.type === "person")
+      .map((node) => {
+        const screenPosition = instance.flowToScreenPosition(node.position);
+        const width = personCardWidth * instance.getViewport().zoom;
+        const height = personCardHeight * instance.getViewport().zoom;
+        const intersectsViewport =
+          screenPosition.x + width >= canvasRect.left &&
+          screenPosition.x <= canvasRect.right &&
+          screenPosition.y + height >= canvasRect.top &&
+          screenPosition.y <= canvasRect.bottom;
+
+        return {
+          node,
+          screenPosition,
+          intersectsViewport
+        };
+      })
+      .filter((candidate) => candidate.intersectsViewport);
+
+    const anchor =
+      candidates.sort((a, b) => a.screenPosition.y - b.screenPosition.y || a.screenPosition.x - b.screenPosition.x)[0] ??
+      visibleOrgNodes
+        .filter((node) => node.type === "person")
+        .map((node) => ({
+          node,
+          screenPosition: instance.flowToScreenPosition(node.position)
+        }))
+        .sort((a, b) => a.screenPosition.y - b.screenPosition.y || a.screenPosition.x - b.screenPosition.x)[0];
+
+    if (!anchor) return;
+
+    pendingViewportAnchorRef.current = {
+      nodeId: anchor.node.id,
+      screenPosition: anchor.screenPosition
+    };
+  };
+
+  useLayoutEffect(() => {
+    const anchor = pendingViewportAnchorRef.current;
+    const instance = reactFlowInstanceRef.current;
+    if (!anchor || !instance || viewMode !== "org") return;
+
+    const nextAnchorNode = visibleOrgNodes.find((node) => node.id === anchor.nodeId);
+    if (!nextAnchorNode) {
+      pendingViewportAnchorRef.current = null;
+      return;
+    }
+
+    const currentScreenPosition = instance.flowToScreenPosition(nextAnchorNode.position);
+    const viewport = instance.getViewport();
+    pendingViewportAnchorRef.current = null;
+
+    void instance.setViewport(
+      {
+        x: viewport.x + anchor.screenPosition.x - currentScreenPosition.x,
+        y: viewport.y + anchor.screenPosition.y - currentScreenPosition.y,
+        zoom: viewport.zoom
+      },
+      { duration: 0 }
+    );
+  }, [viewMode, visibleOrgNodes]);
 
   useEffect(() => {
     setFormState(initialForm(selectedPerson));
@@ -321,23 +428,60 @@ export default function App() {
   };
 
   const addPerson = (roleType: RoleType) => {
-    const parentId =
-      selectedPerson?.roleType === "ic" || selectedPerson?.roleType === "open-role"
-        ? selectedPerson.parentId
-        : selectedPerson?.id ?? orgData.rootId;
-
+    const parentId = selectedPerson?.id ?? orgData.rootId;
     const nextPerson = createEmptyPerson(parentId, roleType);
     nextPerson.managerName = selectedPerson?.name ?? "";
+
+    captureViewportAnchor();
     commitOrgChange((current) => ({
-        ...current,
-        people: [...current.people, nextPerson]
+      ...current,
+      people: [...current.people, nextPerson]
     }));
     setSelectedId(nextPerson.id);
-    setCollapsedIds((current) => {
-      const next = new Set(current);
-      if (parentId) next.delete(parentId);
-      return next;
-    });
+    if (!canvasLocked) {
+      setOrgFocusId(parentId ?? nextPerson.id);
+      setExpandedIds(parentId ? new Set([parentId]) : new Set());
+    }
+  };
+
+  const addLeader = () => {
+    const currentRoot = orgData.people.find((person) => person.id === orgData.rootId) ?? orgData.people[0];
+    if (!currentRoot) return;
+
+    const nextLeader: PersonRecord = {
+      ...createEmptyPerson(null, "executive"),
+      name: "New Leader",
+      role: "Leadership",
+      managerOrIc: "Manager",
+      workerType: currentRoot.workerType || "Full Time",
+      title: "Leader",
+      managerName: "",
+      level: Number.isFinite(currentRoot.level) ? currentRoot.level + 1 : 1,
+      location: currentRoot.location || "Remote",
+      roleType: "executive"
+    };
+
+    captureViewportAnchor();
+    commitOrgChange((current) => ({
+      rootId: nextLeader.id,
+      people: [
+        nextLeader,
+        ...current.people.map((person) =>
+          person.id === current.rootId
+            ? {
+                ...person,
+                parentId: nextLeader.id,
+                managerName: nextLeader.name
+              }
+            : person
+        )
+      ]
+    }));
+    setSelectedId(nextLeader.id);
+    if (!canvasLocked) {
+      setOrgFocusId(nextLeader.id);
+      setExpandedIds(new Set([nextLeader.id, currentRoot.id]));
+    }
   };
 
   const deleteSelected = () => {
@@ -352,6 +496,7 @@ export default function App() {
     };
     collect(selectedPerson.id);
 
+    captureViewportAnchor();
     commitOrgChange((current) => ({
       ...current,
       people: current.people.filter((person) => !descendants.has(person.id))
@@ -397,20 +542,22 @@ export default function App() {
 
     try {
       const { toPng } = await import("html-to-image");
+      await waitForNextPaint();
+
       const exportBounds = getCanvasBounds(
         renderedNodes,
         personCardWidth,
         personCardHeight,
-        56,
-        44
+        140,
+        120
       );
       const exportViewport = getViewportForBounds(
         exportBounds,
         EXPORT_WIDTH,
         EXPORT_HEIGHT,
         0.25,
-        2,
-        0.08
+        1.4,
+        0.02
       );
 
       await instance.setViewport(exportViewport, { duration: 0 });
@@ -455,7 +602,8 @@ export default function App() {
     redoStackRef.current = [];
     setOrgData(nextData);
     setSelectedId(nextData.rootId);
-    setCollapsedIds(new Set());
+    setOrgFocusId(nextData.rootId);
+    setExpandedIds(new Set([nextData.rootId]));
     setOrgPreviewPositions({});
     setLocationPreviewPositions({});
     setDropTargetId(null);
@@ -509,6 +657,19 @@ export default function App() {
   const handleNodeSelection = (node: AppNode) => {
     if (node.type === "project") return;
     const personId = node.data.person.id;
+    const parentId = node.data.person.parentId;
+    const hasDirectReports = (orgChildrenMap[personId] ?? []).length > 0;
+    if (!canvasLocked && viewMode === "org") {
+      captureViewportAnchor();
+      if (isLowestLevelTeamManager(personId)) {
+        setExpandedIds((current) => new Set(current).add(personId));
+      } else if (!hasDirectReports && parentId && isLowestLevelTeamManager(parentId)) {
+        setExpandedIds((current) => new Set(current).add(parentId));
+      } else {
+        setOrgFocusId(personId);
+        setExpandedIds(getDefaultFocusedExpandedIds(orgData, personId));
+      }
+    }
     setSelectedId(personId);
     if (isMobileLayout) {
       setMobilePanelOpen(true);
@@ -539,14 +700,18 @@ export default function App() {
 
       const movingPerson = orgData.people.find((person) => person.id === sourceId);
       const candidatePerson = orgData.people.find((person) => person.id === candidate.id);
+      const overlapWidth = Math.min(nodeRect.right, candidate.position.x + personCardWidth) - Math.max(nodeRect.left, candidate.position.x);
+      const overlapRatio = overlapWidth / personCardWidth;
 
-      if (
+      const isPeerManagerReorder =
         movingPerson &&
         candidatePerson &&
         movingPerson.roleType === "manager" &&
         candidatePerson.roleType === "manager" &&
-        movingPerson.parentId === candidatePerson.parentId
-      ) {
+        movingPerson.parentId === candidatePerson.parentId &&
+        overlapRatio < 0.42;
+
+      if (isPeerManagerReorder) {
         return {
           valid: null,
           invalid: null,
@@ -593,14 +758,16 @@ export default function App() {
     if (interactionMode !== "drag") return;
     const target = detectOrgDropTarget(node);
     if (target.reorder) {
+      captureViewportAnchor();
       commitOrgChange((current) => ({
         ...current,
         people: reorderSiblings(current.people, node.id, target.reorder!.id, target.reorder!.placement)
       }));
     } else if (target.valid) {
+      captureViewportAnchor();
       commitOrgChange((current) => ({
-          ...current,
-          people: reparentPerson(current.people, node.id, target.valid!)
+        ...current,
+        people: reparentPerson(current.people, node.id, target.valid!)
       }));
     }
     setOrgPreviewPositions({});
@@ -680,19 +847,34 @@ export default function App() {
   };
 
   const toggleCollapse = () => {
-    if (!selectedPerson) return;
-    if (selectedPerson.roleType === "ic" || selectedPerson.roleType === "open-role") {
-      return;
-    }
-    setCollapsedIds((current) => {
+    const targetId = canvasLocked ? orgFocusId : selectedPerson?.id;
+    if (!targetId) return;
+    if ((orgChildrenMap[targetId] ?? []).length === 0) return;
+
+    captureViewportAnchor();
+    setExpandedIds((current) => {
+      if (!isLowestLevelTeamManager(targetId)) {
+        return current.has(targetId) ? new Set() : new Set([targetId]);
+      }
+
       const next = new Set(current);
-      if (next.has(selectedPerson.id)) {
-        next.delete(selectedPerson.id);
+      if (next.has(targetId)) {
+        next.delete(targetId);
       } else {
-        next.add(selectedPerson.id);
+        next.add(targetId);
       }
       return next;
     });
+  };
+
+  const collapseAll = () => {
+    captureViewportAnchor();
+    setExpandedIds(new Set());
+  };
+
+  const expandAll = () => {
+    captureViewportAnchor();
+    setExpandedIds(getFocusedExpandableIds(orgData, orgFocusId ?? orgData.rootId));
   };
 
   const locationSummary = useMemo(() => {
@@ -717,14 +899,10 @@ export default function App() {
       })),
     [activeNodes, isDragEditing, orgData.rootId]
   );
-  const activeCanvasExtent = useMemo(
-    () => getCanvasExtent(renderedNodes, personCardWidth, personCardHeight),
-    [personCardHeight, personCardWidth, renderedNodes]
-  );
-  const canCollapseSelection =
-    !!selectedPerson && selectedPerson.roleType !== "ic" && selectedPerson.roleType !== "open-role";
+  const collapseTargetId = canvasLocked ? orgFocusId : selectedPerson?.id;
+  const canCollapseSelection = !!collapseTargetId && (orgChildrenMap[collapseTargetId] ?? []).length > 0;
   const collapseLabel =
-    selectedPerson && canCollapseSelection && collapsedIds.has(selectedPerson.id) ? "Expand selected" : "Collapse selected";
+    collapseTargetId && canCollapseSelection && expandedIds.has(collapseTargetId) ? "Collapse selected" : "Expand selected";
   const canUndo = undoStackRef.current.length > 0;
   const canRedo = redoStackRef.current.length > 0;
 
@@ -809,14 +987,15 @@ export default function App() {
         <div className="sidebar-section">
           <p className="section-kicker">Edit</p>
           <div className="toolbar-grid">
+            <button onClick={addLeader}>Add leader</button>
             <button onClick={() => addPerson("manager")}>Add manager</button>
             <button onClick={() => addPerson("ic")}>Add IC</button>
             <button onClick={() => addPerson("open-role")}>Add open role</button>
             <button onClick={toggleCollapse} disabled={!canCollapseSelection}>
               {collapseLabel}
             </button>
-            <button onClick={() => setCollapsedIds(toggleCollapseForAll(orgData, true))}>Collapse all</button>
-            <button onClick={() => setCollapsedIds(toggleCollapseForAll(orgData, false))}>Expand all</button>
+            <button onClick={collapseAll}>Collapse all</button>
+            <button onClick={expandAll}>Expand all</button>
           </div>
         </div>
 
@@ -1115,7 +1294,9 @@ export default function App() {
             ) : null}
           </div>
           <div className="canvas-meta">
-            <span>{orgData.people.length} roles</span>
+            <span>
+              {roleSummary.managers} managers · {roleSummary.individualContributors} IC · {roleSummary.openRoles} open
+            </span>
             <span>{search ? `${filteredIds.size} matching` : "All visible"}</span>
             <span>{isDragEditing ? "Drag editing enabled" : "Pan and inspect mode"}</span>
             {draggedNodeId ? (
@@ -1138,17 +1319,16 @@ export default function App() {
           ref={canvasFrameRef}
           className={`canvas-frame ${isDragEditing ? "is-drag-editing" : "is-viewing"} ${
             viewMode === "org" ? "is-org-view" : "is-location-view"
-          }`}
+          } ${isPrinting ? "is-exporting" : ""}`}
         >
           <ReactFlow<AppNode>
             nodes={renderedNodes}
             edges={activeEdges}
             nodeTypes={nodeTypes}
+            edgeTypes={edgeTypes}
             onNodeClick={(_, node) => handleNodeSelection(node)}
             onNodeDrag={isDragEditing ? (viewMode === "org" ? onOrgNodeDrag : onLocationNodeDrag) : undefined}
             onNodeDragStop={isDragEditing ? (viewMode === "org" ? onOrgNodeDragStop : onLocationNodeDragStop) : undefined}
-            fitView
-            fitViewOptions={{ padding: 0.12, minZoom: 0.55 }}
             minZoom={0.45}
             maxZoom={1.5}
             snapToGrid
@@ -1160,25 +1340,34 @@ export default function App() {
             zoomOnPinch
             panOnScroll={false}
             panOnDrag={isDragEditing ? (isMobileLayout ? true : [1]) : true}
+            autoPanOnNodeFocus={false}
             selectionOnDrag={false}
             selectNodesOnDrag={false}
             nodeDragThreshold={1}
-            translateExtent={activeCanvasExtent}
-            onlyRenderVisibleElements
             proOptions={{ hideAttribution: true }}
             onInit={(instance) => {
               reactFlowInstanceRef.current = instance;
             }}
           >
             <Panel position="top-right">
-              <div className="view-chip">
-                {viewMode === "org" ? "Hierarchy view" : "Location view"} · {isDragEditing ? "Drag edit" : "View"}
+              <div className="canvas-chip-row">
+                <button
+                  className={`canvas-lock-button ${canvasLocked ? "is-locked" : ""}`}
+                  onClick={() => setCanvasLocked((current) => !current)}
+                  type="button"
+                >
+                  {canvasLocked ? "Unlock focus" : "Lock focus"}
+                </button>
+                <div className="view-chip">
+                  {viewMode === "org" ? "Hierarchy view" : "Location view"} · {isDragEditing ? "Drag edit" : "View"}
+                  {viewMode === "org" && canvasLocked ? " · Locked" : ""}
+                </div>
               </div>
             </Panel>
             <Background
-              color={viewMode === "org" ? "rgba(173, 194, 222, 0.22)" : "#d8dde6"}
+              color={viewMode === "org" ? "rgba(49, 66, 245, 0.08)" : "#d8dde6"}
               variant={BackgroundVariant.Dots}
-              gap={18}
+              gap={viewMode === "org" ? 28 : 18}
               size={1}
             />
           </ReactFlow>
@@ -1188,14 +1377,54 @@ export default function App() {
   );
 }
 
+function ReportingEdge({
+  id,
+  sourceX,
+  sourceY,
+  targetX,
+  targetY,
+  sourcePosition,
+  targetPosition,
+  style,
+  markerEnd
+}: EdgeProps) {
+  const [edgePath] = getSmoothStepPath({
+    sourceX,
+    sourceY,
+    sourcePosition,
+    targetX,
+    targetY,
+    targetPosition,
+    borderRadius: 12
+  });
+
+  return (
+    <>
+      <BaseEdge id={`${id}-halo`} path={edgePath} className="reporting-edge-halo" />
+      <BaseEdge id={id} path={edgePath} markerEnd={markerEnd} style={style} className="reporting-edge" />
+    </>
+  );
+}
+
 function PersonNode({ data }: { data: OrgNodeData }) {
-  const { person, selected, collapsed, isDropTarget, isInvalidTarget, viewMode, lightMode } = data;
+  const {
+    person,
+    selected,
+    collapsed,
+    isDropTarget,
+    isInvalidTarget,
+    isFocusGroup,
+    directReportCount,
+    viewMode,
+    lightMode
+  } = data;
   const roleToneClass = `tone-${person.role.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
   const cardClasses = [
     "person-card",
     `role-${person.roleType}`,
     selected ? "is-selected" : "",
     collapsed ? "is-collapsed" : "",
+    isFocusGroup ? "is-focus-open" : "",
     isDropTarget ? "is-drop-target" : "",
     isInvalidTarget ? "is-invalid-target" : "",
     viewMode === "location" ? "is-project-card" : "",
@@ -1206,6 +1435,15 @@ function PersonNode({ data }: { data: OrgNodeData }) {
 
   return (
     <div className={cardClasses}>
+      {viewMode === "org" ? (
+        <>
+          <Handle id="report-target-top" type="target" position={Position.Top} className="reporting-handle" />
+          <Handle id="report-target-left" type="target" position={Position.Left} className="reporting-handle" />
+          <Handle id="report-target-right" type="target" position={Position.Right} className="reporting-handle" />
+          <Handle id="report-source-bottom" type="source" position={Position.Bottom} className="reporting-handle" />
+        </>
+      ) : null}
+      {!lightMode && viewMode === "org" ? <div className="card-avatar" aria-hidden="true">{getInitials(person.name)}</div> : null}
       {!lightMode ? (
         <>
           <div className="card-topline">
@@ -1225,6 +1463,7 @@ function PersonNode({ data }: { data: OrgNodeData }) {
           <strong>{person.name}</strong>
         </div>
       )}
+      {directReportCount > 0 ? <span className="report-count-badge">{directReportCount}</span> : null}
     </div>
   );
 }

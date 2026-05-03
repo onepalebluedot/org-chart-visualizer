@@ -4,13 +4,14 @@ Single-page org chart editor built with React, TypeScript, Vite, and React Flow.
 
 ## Current App Features
 
-- Org view with reporting lines
+- Focused Org view with reporting lines, reporting chain, peer row, and direct reports for the selected person
 - Location view grouped by `Location`
 - Full card view and light view
 - View mode and drag edit mode
-- Drag a card onto a valid manager to reassign reporting
+- Drag a card onto any valid visible person to reassign reporting
 - Drag a manager across sibling managers to reorder whole teams left/right
-- Collapse/expand for branches and global collapse/expand controls
+- Focus-context collapse/expand controls
+- Add leader action to insert a new root above the current top person
 - Search by name, role, title, manager/IC, level, worker type, or location
 - Side panel editing for the selected card
 - Save and load JSON snapshots
@@ -212,9 +213,12 @@ then the default Vite config is usually fine.
 ## Interaction Notes
 
 - Click a card to edit it in the left panel.
+- In `Org view`, selecting a card focuses the canvas around that person, their reporting chain, their peers, and their visible reports.
 - In `View mode`, the canvas is for browsing.
 - In `Drag edit`, left-drag edits cards and middle mouse drag pans the canvas.
-- In Org view, ICs and open roles must remain under a valid manager.
+- In Org view, drag a person onto another visible card to update the reporting line; descendant loops and moving the root are blocked.
+- `Collapse all` keeps the reporting chain and focused peer row visible; `Expand all` expands the currently visible focus context.
+- `Add leader` creates a new top-level leader and moves the previous root underneath that leader.
 - In Location view, dragging a person into another location column updates that person’s `location`.
 - `Undo` and `Redo` step through edit history.
 - `Light view` compresses cards for high-density scanning.

@@ -1,4 +1,4 @@
-import type { Edge, Node, XYPosition } from "@xyflow/react";
+import { Position, type Edge, type Node, type XYPosition } from "@xyflow/react";
 import type { LayoutNode, OrgData, PersonRecord, RoleType, ViewMode } from "../types";
 
 interface SavedOrgFile {
@@ -33,28 +33,38 @@ export interface OrgNodeData extends Record<string, unknown> {
   collapsed: boolean;
   isDropTarget: boolean;
   isInvalidTarget: boolean;
+  isFocusGroup: boolean;
+  directReportCount: number;
   viewMode: ViewMode;
   lightMode: boolean;
 }
 
 export type AppNode = Node<OrgNodeData>;
 
-const STANDARD_GRID = {
-  columnWidth: 278,
-  rowHeight: 96,
-  indent: 10,
-  rootY: 24,
-  columnStartX: 110,
-  columnStartY: 118
+const FOCUSED_STANDARD_LAYOUT = {
+  nodeWidth: 260,
+  nodeHeight: 104,
+  columnGap: 72,
+  rowGap: 72,
+  leafGap: 16,
+  leafOffset: 14,
+  branchColumnGap: 58,
+  branchVerticalGap: 58,
+  marginX: 118,
+  marginY: 28
 };
 
-const LIGHT_GRID = {
-  columnWidth: 176,
-  rowHeight: 52,
-  indent: 6,
-  rootY: 18,
-  columnStartX: 92,
-  columnStartY: 84
+const FOCUSED_LIGHT_LAYOUT = {
+  nodeWidth: 168,
+  nodeHeight: 42,
+  columnGap: 14,
+  rowGap: 30,
+  leafGap: 10,
+  leafOffset: 8,
+  branchColumnGap: 28,
+  branchVerticalGap: 28,
+  marginX: 92,
+  marginY: 20
 };
 
 const LOCATION_STANDARD_LAYOUT = {
@@ -341,49 +351,179 @@ const sortReports = (reports: PersonRecord[]): PersonRecord[] =>
     return rank(a) - rank(b) || (a.sortOrder ?? 0) - (b.sortOrder ?? 0) || a.name.localeCompare(b.name);
   });
 
-export const buildOrgLayout = (data: OrgData, collapsedIds: Set<string>, lightMode: boolean): LayoutNode[] => {
-  const grid = lightMode ? LIGHT_GRID : STANDARD_GRID;
+const getFocusParts = (data: OrgData, focusId: string | null) => {
+  const byId = peopleById(data.people);
   const childrenMap = childrenByParent(data.people);
-  const positions: LayoutNode[] = [];
-  const topLevelReports = sortReports(childrenMap[data.rootId] ?? []);
-  const rootCenterX =
-    topLevelReports.length > 0
-      ? grid.columnStartX + ((topLevelReports.length - 1) * grid.columnWidth) / 2
-      : grid.columnStartX;
+  const root = byId[data.rootId] ?? data.people[0];
+  const focus = (focusId ? byId[focusId] : null) ?? root;
+  const ancestors: PersonRecord[] = [];
+  const visited = new Set<string>([focus.id]);
+  let current = focus;
 
-  positions.push({
-    id: data.rootId,
-    x: rootCenterX,
-    y: grid.rootY
-  });
+  while (current.parentId) {
+    const parent = byId[current.parentId];
+    if (!parent || visited.has(parent.id)) break;
+    ancestors.unshift(parent);
+    visited.add(parent.id);
+    current = parent;
+  }
 
-  const nextYByColumn = topLevelReports.map(() => grid.columnStartY);
+  const peers =
+    focus.parentId && childrenMap[focus.parentId]?.length
+      ? sortReports(childrenMap[focus.parentId])
+      : [focus];
 
-  const placeInColumn = (personId: string, columnIndex: number, depth: number) => {
-    positions.push({
-      id: personId,
-      x: grid.columnStartX + columnIndex * grid.columnWidth + depth * grid.indent,
-      y: nextYByColumn[columnIndex]
-    });
+  return {
+    childrenMap,
+    focus,
+    ancestors,
+    peers
+  };
+};
 
-    nextYByColumn[columnIndex] += grid.rowHeight;
+export const getFocusedExpandableIds = (data: OrgData, focusId: string | null): Set<string> => {
+  const { childrenMap, ancestors, peers } = getFocusParts(data, focusId);
+  const expandableIds = new Set<string>();
+  const visited = new Set<string>();
 
-    if (collapsedIds.has(personId)) {
-      return;
-    }
+  const collect = (people: PersonRecord[]) => {
+    for (const person of people) {
+      if (visited.has(person.id)) continue;
+      visited.add(person.id);
 
-    const reports = sortReports(childrenMap[personId] ?? []);
-    for (const child of reports) {
-      placeInColumn(child.id, columnIndex, depth + 1);
+      const reports = sortReports(childrenMap[person.id] ?? []);
+      if (reports.length === 0) continue;
+
+      expandableIds.add(person.id);
+      collect(reports);
     }
   };
 
-  topLevelReports.forEach((report, columnIndex) => {
-    placeInColumn(report.id, columnIndex, 0);
+  collect([...ancestors, ...peers]);
+  return expandableIds;
+};
+
+export const getDefaultFocusedExpandedIds = (data: OrgData, focusId: string | null): Set<string> => {
+  const { childrenMap, focus } = getFocusParts(data, focusId);
+  return (childrenMap[focus.id] ?? []).length > 0 ? new Set([focus.id]) : new Set();
+};
+
+const buildFocusedLaneOrgLayout = (data: OrgData, expandedIds: Set<string>, focusId: string | null, lightMode: boolean): LayoutNode[] => {
+  const layout = lightMode ? FOCUSED_LIGHT_LAYOUT : FOCUSED_STANDARD_LAYOUT;
+  const byId = peopleById(data.people);
+  const { childrenMap, focus, ancestors, peers } = getFocusParts(data, focusId);
+  const rows: PersonRecord[][] = [];
+  const rowSignatures = new Set<string>();
+  const visibleIds = new Set<string>();
+  const leafStacks = new Map<string, PersonRecord[]>();
+  const positions = new Map<string, LayoutNode>();
+  const leafStep = layout.nodeHeight + layout.leafGap;
+
+  const addRow = (peopleInRow: PersonRecord[]) => {
+    const row = peopleInRow.filter((person) => byId[person.id]);
+    if (row.length === 0) return;
+
+    const signature = row.map((person) => person.id).join("|");
+    if (rowSignatures.has(signature)) return;
+
+    rowSignatures.add(signature);
+    rows.push(row);
+    row.forEach((person) => visibleIds.add(person.id));
+  };
+
+  const peerRowFor = (person: PersonRecord): PersonRecord[] =>
+    person.parentId && (childrenMap[person.parentId] ?? []).length > 0
+      ? sortReports(childrenMap[person.parentId])
+      : [person];
+
+  ancestors.forEach((ancestor) => addRow(peerRowFor(ancestor)));
+  addRow(peers.length > 0 ? peers : [focus]);
+
+  let cursor = 0;
+  while (cursor < rows.length) {
+    const row = rows[cursor];
+    cursor += 1;
+
+    for (const person of row) {
+      if (!expandedIds.has(person.id)) continue;
+
+      const reports = sortReports(childrenMap[person.id] ?? []);
+      if (reports.length === 0) continue;
+
+      const reportsAreLeaves = reports.every((report) => (childrenMap[report.id] ?? []).length === 0);
+      if (reportsAreLeaves) {
+        leafStacks.set(person.id, reports);
+        reports.forEach((report) => visibleIds.add(report.id));
+      } else {
+        addRow(reports);
+      }
+    }
+  }
+
+  const branchFootprint = layout.nodeWidth * 2 + layout.branchColumnGap;
+  const itemWidth = (person: PersonRecord): number => (leafStacks.has(person.id) ? branchFootprint : layout.nodeWidth);
+  const rowWidth = (row: PersonRecord[]): number =>
+    row.reduce((total, person) => total + itemWidth(person), 0) + Math.max(0, row.length - 1) * layout.columnGap;
+  const maxRowWidth = Math.max(0, ...rows.map(rowWidth));
+  const centerX = layout.marginX + maxRowWidth / 2;
+  let currentY = layout.marginY;
+
+  rows.forEach((row) => {
+    let cursorX = centerX - rowWidth(row) / 2;
+    let rowHeight = layout.nodeHeight;
+
+    row.forEach((person) => {
+      const width = itemWidth(person);
+      positions.set(person.id, {
+        id: person.id,
+        x: cursorX + (width - layout.nodeWidth) / 2,
+        y: currentY
+      });
+
+      const stackedReports = leafStacks.get(person.id) ?? [];
+      if (stackedReports.length > 0) {
+        const branchLength = Math.ceil(stackedReports.length / 2);
+        rowHeight = Math.max(
+          rowHeight,
+          layout.nodeHeight + layout.branchVerticalGap + branchLength * leafStep - layout.leafGap
+        );
+      }
+
+      cursorX += width + layout.columnGap;
+    });
+
+    currentY += rowHeight + layout.rowGap;
   });
 
-  return positions;
+  for (const [parentId, reports] of leafStacks) {
+    const parentPosition = positions.get(parentId);
+    if (!parentPosition) continue;
+
+    const parentCenterX = parentPosition.x + layout.nodeWidth / 2;
+    reports.forEach((report, index) => {
+      const branchIndex = index % 2;
+      const rowIndex = Math.floor(index / 2);
+      const x =
+        branchIndex === 0
+          ? parentCenterX - layout.branchColumnGap / 2 - layout.nodeWidth
+          : parentCenterX + layout.branchColumnGap / 2;
+
+      positions.set(report.id, {
+        id: report.id,
+        x,
+        y: parentPosition.y + layout.nodeHeight + layout.branchVerticalGap + rowIndex * leafStep
+      });
+    });
+  }
+
+  return [...visibleIds].flatMap((personId) => {
+    const position = positions.get(personId);
+    return position ? [position] : [];
+  });
 };
+
+export const buildOrgLayout = (data: OrgData, expandedIds: Set<string>, lightMode: boolean, focusId: string | null): LayoutNode[] =>
+  buildFocusedLaneOrgLayout(data, expandedIds, focusId, lightMode);
 
 export const buildLocationLayout = (people: PersonRecord[], lightMode: boolean): LayoutNode[] => {
   const layout = lightMode ? LOCATION_LIGHT_LAYOUT : LOCATION_STANDARD_LAYOUT;
@@ -526,18 +666,6 @@ export const normalizeOrgData = (data: OrgData): OrgData => {
   };
 };
 
-export const toggleCollapseForAll = (data: OrgData, nextCollapsed: boolean): Set<string> => {
-  if (!nextCollapsed) {
-    return new Set<string>();
-  }
-
-  return new Set(
-    data.people
-      .filter((person) => person.id !== data.rootId && person.roleType !== "ic" && person.roleType !== "open-role")
-      .map((person) => person.id)
-  );
-};
-
 export const serializeOrgData = (data: OrgData): string =>
   JSON.stringify(
     {
@@ -591,26 +719,33 @@ export const filterPeople = (people: PersonRecord[], query: string): Set<string>
 
 export const buildOrgFlow = ({
   data,
-  collapsedIds,
+  expandedIds,
   selectedId,
+  focusId,
   dropTargetId,
   invalidTargetId,
   previewPositions,
   lightMode
 }: {
   data: OrgData;
-  collapsedIds: Set<string>;
+  expandedIds: Set<string>;
   selectedId: string | null;
+  focusId: string | null;
   dropTargetId: string | null;
   invalidTargetId: string | null;
   previewPositions: Record<string, XYPosition>;
   lightMode: boolean;
 }): { nodes: AppNode[]; edges: Edge[] } => {
   const byId = peopleById(data.people);
-  const layout = buildOrgLayout(data, collapsedIds, lightMode);
+  const childrenMap = childrenByParent(data.people);
+  const layout = buildOrgLayout(data, expandedIds, lightMode, focusId);
+  const layoutById = new Map(layout.map((item) => [item.id, item]));
   const visibleIds = new Set(layout.map((item) => item.id));
   const nodes: AppNode[] = layout.map((layoutNode) => {
     const person = byId[layoutNode.id];
+    const directReportCount = (childrenMap[person.id] ?? []).length;
+    const hasReports = directReportCount > 0;
+
     return {
       id: person.id,
       type: "person",
@@ -618,25 +753,54 @@ export const buildOrgFlow = ({
       data: {
         person,
         selected: person.id === selectedId,
-        collapsed: collapsedIds.has(person.id),
+        collapsed: hasReports && !expandedIds.has(person.id),
         isDropTarget: person.id === dropTargetId,
         isInvalidTarget: person.id === invalidTargetId,
+        isFocusGroup: person.id === focusId && expandedIds.has(person.id),
+        directReportCount,
         viewMode: "org",
         lightMode
       },
+      sourcePosition: Position.Bottom,
+      targetPosition: Position.Top,
       draggable: person.id !== data.rootId
     };
   });
 
   const edges: Edge[] = data.people
     .filter((person) => person.parentId && visibleIds.has(person.id) && visibleIds.has(person.parentId))
-    .map((person) => ({
-      id: `${person.parentId}-${person.id}`,
-      source: person.parentId!,
-      target: person.id,
-      type: "default",
-      animated: false
-    }));
+    .map((person) => {
+      const parentPosition = layoutById.get(person.parentId!);
+      const childPosition = layoutById.get(person.id);
+      const parentCenterX = parentPosition ? parentPosition.x + (lightMode ? FOCUSED_LIGHT_LAYOUT.nodeWidth : FOCUSED_STANDARD_LAYOUT.nodeWidth) / 2 : 0;
+      const childCenterX = childPosition ? childPosition.x + (lightMode ? FOCUSED_LIGHT_LAYOUT.nodeWidth : FOCUSED_STANDARD_LAYOUT.nodeWidth) / 2 : 0;
+      const horizontalDelta = childCenterX - parentCenterX;
+      const parentReports = childrenMap[person.parentId!] ?? [];
+      const isExpandedLowestLevelBranch =
+        expandedIds.has(person.parentId!) &&
+        parentReports.length > 0 &&
+        parentReports.every((report) => (childrenMap[report.id] ?? []).length === 0);
+      const targetHandle =
+        isExpandedLowestLevelBranch && Math.abs(horizontalDelta) >= 40
+          ? horizontalDelta < 0
+            ? "report-target-right"
+            : "report-target-left"
+          : "report-target-top";
+
+      return {
+        id: `${person.parentId}-${person.id}`,
+        source: person.parentId!,
+        target: person.id,
+        sourceHandle: "report-source-bottom",
+        targetHandle,
+        type: "reporting",
+        animated: false,
+        style: {
+          stroke: person.id === focusId || person.parentId === focusId ? "#3042f5" : "#aeb3cb",
+          strokeWidth: person.id === focusId || person.parentId === focusId ? 2.8 : 1.8
+        }
+      };
+    });
 
   return { nodes, edges };
 };
@@ -654,6 +818,7 @@ export const buildLocationFlow = ({
 }): { nodes: AppNode[]; edges: Edge[] } => {
   const layout = lightMode ? LOCATION_LIGHT_LAYOUT : LOCATION_STANDARD_LAYOUT;
   const groups = new Map<string, PersonRecord[]>();
+  const directReportCounts = childrenByParent(data.people);
 
   for (const person of data.people) {
     const location = person.location || "Unassigned";
@@ -688,6 +853,8 @@ export const buildLocationFlow = ({
         collapsed: false,
         isDropTarget: false,
         isInvalidTarget: false,
+        isFocusGroup: false,
+        directReportCount: members.length,
         viewMode: "location",
         lightMode
       },
@@ -712,6 +879,8 @@ export const buildLocationFlow = ({
             collapsed: false,
             isDropTarget: false,
             isInvalidTarget: false,
+            isFocusGroup: false,
+            directReportCount: (directReportCounts[member.id] ?? []).length,
             viewMode: "location",
             lightMode
           },
