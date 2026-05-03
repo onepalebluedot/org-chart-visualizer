@@ -4,7 +4,9 @@ Single-page org chart editor built with React, TypeScript, Vite, and React Flow.
 
 ## Current App Features
 
-- Focused Org view with reporting lines, reporting chain, peer row, and direct reports for the selected person
+- Focused Org view with a Glean-style canvas, reporting lines, reporting chain, peer row, and direct reports for the selected person
+- Expanded lowest-level teams render as balanced left/right branches under their manager
+- Direct reporting relationships use explicit connector lines with stronger focus-path styling
 - Location view grouped by `Location`
 - Full card view and light view
 - View mode and drag edit mode
@@ -16,7 +18,8 @@ Single-page org chart editor built with React, TypeScript, Vite, and React Flow.
 - Side panel editing for the selected card
 - Save and load JSON snapshots
 - Import `.xlsx`, `.xls`, and `.csv` roster files in-browser
-- Export the current view as a landscape PNG image
+- Header summary with manager, IC, and open-role counts
+- Export the current visible org/location state as a landscape PNG image
 - Publish-safe default demo org included
 
 ## Data Model
@@ -119,13 +122,15 @@ Accepted shapes:
 
 ## Image Export
 
-The `Print image` button exports the current canvas view as a PNG sized for PowerPoint-style landscape slides.
+The `Print image` button exports the current canvas state as a PNG sized for PowerPoint-style landscape slides.
 
 Behavior:
 
 - works with `Org view` and `Location view`
 - respects the current card density, so `Light view` exports as light view
-- fits all currently visible cards into frame before capture
+- respects the current expand/collapse state
+- fits all currently rendered cards into frame before capture, regardless of the current on-screen pan/zoom
+- hides canvas overlay controls from the exported image
 - restores your previous zoom/pan after export
 
 This is useful for dropping the current org snapshot directly into presentations.
@@ -214,6 +219,8 @@ then the default Vite config is usually fine.
 
 - Click a card to edit it in the left panel.
 - In `Org view`, selecting a card focuses the canvas around that person, their reporting chain, their peers, and their visible reports.
+- Lowest-level manager teams can remain open together for side-by-side comparison.
+- Clicking an IC in an expanded lowest-level team selects it without changing the team branch layout.
 - In `View mode`, the canvas is for browsing.
 - In `Drag edit`, left-drag edits cards and middle mouse drag pans the canvas.
 - In Org view, drag a person onto another visible card to update the reporting line; descendant loops and moving the root are blocked.
