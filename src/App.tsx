@@ -92,6 +92,7 @@ const LOCATION_COLUMN_START_X = 120;
 const GRID_SIZE = 20;
 const EXPORT_WIDTH = 1600;
 const EXPORT_HEIGHT = 900;
+const EXPORT_PIXEL_RATIO = 3;
 
 const getCanvasBounds = (
   nodes: AppNode[],
@@ -562,7 +563,7 @@ export default function App() {
 
       const dataUrl = await toPng(canvas, {
         cacheBust: true,
-        pixelRatio: 2,
+        pixelRatio: EXPORT_PIXEL_RATIO,
         width: EXPORT_WIDTH,
         height: EXPORT_HEIGHT,
         style: {
@@ -580,7 +581,7 @@ export default function App() {
 
       setPrintMessage({
         tone: "success",
-        text: "Landscape image exported."
+        text: "High-resolution landscape image exported."
       });
     } catch (error) {
       setPrintMessage({
@@ -1277,7 +1278,7 @@ export default function App() {
             <span>
               {roleSummary.managers} managers · {roleSummary.individualContributors} IC · {roleSummary.openRoles} open
             </span>
-            <span>{search ? `${filteredIds.size} matching` : "All visible"}</span>
+            {search ? <span>{filteredIds.size} matching</span> : null}
             <span>{isDragEditing ? "Drag editing enabled" : "Pan and inspect mode"}</span>
             {draggedNodeId ? (
               <span className="drop-hint">
@@ -1378,9 +1379,11 @@ function ReportingEdge({
   sourcePosition,
   targetPosition,
   style,
-  markerEnd
+  markerEnd,
+  data
 }: EdgeProps) {
-  const [edgePath] = getSmoothStepPath({
+  const isLightMode = data?.lightMode === true;
+  const [smoothEdgePath] = getSmoothStepPath({
     sourceX,
     sourceY,
     sourcePosition,
@@ -1389,6 +1392,11 @@ function ReportingEdge({
     targetPosition,
     borderRadius: 12
   });
+  const lightEdgePath =
+    targetPosition === Position.Left || targetPosition === Position.Right
+      ? `M ${sourceX} ${sourceY} V ${targetY} H ${targetX}`
+      : `M ${sourceX} ${sourceY} V ${sourceY + (targetY - sourceY) / 2} H ${targetX} V ${targetY}`;
+  const edgePath = isLightMode ? lightEdgePath : smoothEdgePath;
 
   return (
     <>

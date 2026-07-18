@@ -829,6 +829,9 @@ export const buildOrgFlow = ({
         sourceHandle: "report-source-bottom",
         targetHandle,
         type: "reporting",
+        data: {
+          lightMode
+        },
         animated: false,
         style: {
           stroke: person.id === focusId || person.parentId === focusId ? "#3042f5" : "#aeb3cb",

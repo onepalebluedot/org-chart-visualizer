@@ -133,6 +133,7 @@ Behavior:
 - respects the current card density, so `Light view` exports as light view
 - respects the current expand/collapse state
 - fits all currently rendered cards into frame before capture, regardless of the current on-screen pan/zoom
+- exports at 4800×2700 resolution for clearer text when zoomed or placed in presentations
 - hides canvas overlay controls from the exported image
 - restores your previous zoom/pan after export
 
