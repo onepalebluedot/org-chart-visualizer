@@ -408,7 +408,7 @@ export const getDefaultFocusedExpandedIds = (data: OrgData, focusId: string | nu
   return (childrenMap[focus.id] ?? []).length > 0 ? new Set([focus.id]) : new Set();
 };
 
-const buildFocusedLaneOrgLayout = (data: OrgData, expandedIds: Set<string>, focusId: string | null, lightMode: boolean): LayoutNode[] => {
+const buildFocusedTreeOrgLayout = (data: OrgData, expandedIds: Set<string>, focusId: string | null, lightMode: boolean): LayoutNode[] => {
   const layout = lightMode ? FOCUSED_LIGHT_LAYOUT : FOCUSED_STANDARD_LAYOUT;
   const byId = peopleById(data.people);
   const { childrenMap, focus, ancestors, peers } = getFocusParts(data, focusId);
@@ -417,9 +417,10 @@ const buildFocusedLaneOrgLayout = (data: OrgData, expandedIds: Set<string>, focu
   const leafStep = layout.nodeHeight + layout.leafGap;
   const blockGap = layout.columnGap;
 
-  const markVisible = (person: PersonRecord, rowIndex: number) => {
-    if (!byId[person.id]) return;
+  const markVisible = (person: PersonRecord): boolean => {
+    if (!byId[person.id] || visibleIds.has(person.id)) return false;
     visibleIds.add(person.id);
+    return true;
   };
 
   const peerRowFor = (person: PersonRecord): PersonRecord[] =>
@@ -427,38 +428,65 @@ const buildFocusedLaneOrgLayout = (data: OrgData, expandedIds: Set<string>, focu
       ? sortReports(childrenMap[person.parentId])
       : [person];
 
+  // Seed the focus chain and its peer context, then reveal reports only for
+  // explicitly expanded people. A person can enter the visible set once.
+  [...ancestors.flatMap(peerRowFor), ...(peers.length > 0 ? peers : [focus]), focus].forEach(markVisible);
+
+  const pendingIds = [...visibleIds];
+  const processedIds = new Set<string>();
+  while (pendingIds.length > 0) {
+    const personId = pendingIds.shift();
+    if (!personId || processedIds.has(personId)) continue;
+    processedIds.add(personId);
+    if (!expandedIds.has(personId)) continue;
+
+    for (const report of sortReports(childrenMap[personId] ?? [])) {
+      if (markVisible(report)) {
+        pendingIds.push(report.id);
+      }
+    }
+  }
+
+  const visibleChildren = new Map<string, PersonRecord[]>();
+  for (const personId of visibleIds) {
+    visibleChildren.set(
+      personId,
+      sortReports(childrenMap[personId] ?? []).filter((report) => visibleIds.has(report.id))
+    );
+  }
+
+  // A closed leaf group uses the compact two-column Glean-style branch. If a
+  // child branch is open, it receives its own horizontal subtree footprint.
   const usesCompactBranch = (reports: PersonRecord[]): boolean =>
-    reports.length > 0 && !reports.some((report) => expandedIds.has(report.id));
+    reports.length > 0 && !reports.some((report) => (visibleChildren.get(report.id) ?? []).length > 0);
 
-  const contextRows = [...ancestors.map(peerRowFor), peers.length > 0 ? peers : [focus]];
-  contextRows.forEach((row, rowIndex) => row.forEach((person) => markVisible(person, rowIndex)));
+  const widthCache = new Map<string, number>();
+  const blockWidth = (person: PersonRecord, visiting = new Set<string>()): number => {
+    const cached = widthCache.get(person.id);
+    if (cached !== undefined) return cached;
+    if (visiting.has(person.id)) return layout.nodeWidth;
+    visiting.add(person.id);
 
-  const blockWidth = (person: PersonRecord, visited = new Set<string>()): number => {
-    if (visited.has(person.id) || !expandedIds.has(person.id)) return layout.nodeWidth;
-    visited.add(person.id);
+    const reports = visibleChildren.get(person.id) ?? [];
+    let width = layout.nodeWidth;
+    if (usesCompactBranch(reports)) {
+      width = reports.length === 1 ? layout.nodeWidth : layout.nodeWidth * 2 + layout.branchColumnGap;
+    } else if (reports.length > 0) {
+      const childrenWidth =
+        reports.reduce((total, report) => total + blockWidth(report, new Set(visiting)), 0) +
+        Math.max(0, reports.length - 1) * blockGap;
+      width = Math.max(layout.nodeWidth, childrenWidth);
+    }
 
-    const reports = sortReports(childrenMap[person.id] ?? []);
-    if (reports.length === 0) return layout.nodeWidth;
-
-    if (usesCompactBranch(reports)) return Math.max(layout.nodeWidth, layout.nodeWidth * 2 + layout.branchColumnGap);
-
-    const childrenWidth =
-      reports.reduce((total, report) => total + blockWidth(report, new Set(visited)), 0) +
-      Math.max(0, reports.length - 1) * blockGap;
-    return Math.max(layout.nodeWidth, childrenWidth);
+    widthCache.set(person.id, width);
+    return width;
   };
 
-  const contextRowWidth = (row: PersonRecord[]): number =>
-    row.reduce((total, person) => total + blockWidth(person), 0) + Math.max(0, row.length - 1) * blockGap;
-
-  const maxRowWidth = Math.max(0, ...contextRows.map(contextRowWidth));
-  const centerX = layout.marginX + maxRowWidth / 2;
   const rowStep = layout.nodeHeight + layout.rowGap;
 
   const placeSubtree = (person: PersonRecord, x: number, rowIndex: number, visited = new Set<string>()) => {
-    if (visited.has(person.id)) return;
+    if (visited.has(person.id) || positions.has(person.id)) return;
     visited.add(person.id);
-    markVisible(person, rowIndex);
 
     const width = blockWidth(person);
     positions.set(person.id, {
@@ -467,9 +495,7 @@ const buildFocusedLaneOrgLayout = (data: OrgData, expandedIds: Set<string>, focu
       y: layout.marginY + rowIndex * rowStep
     });
 
-    if (!expandedIds.has(person.id)) return;
-
-    const reports = sortReports(childrenMap[person.id] ?? []);
+    const reports = visibleChildren.get(person.id) ?? [];
     if (reports.length === 0) return;
 
     const parentPosition = positions.get(person.id);
@@ -479,12 +505,12 @@ const buildFocusedLaneOrgLayout = (data: OrgData, expandedIds: Set<string>, focu
       reports.forEach((report, index) => {
         const branchIndex = index % 2;
         const leafRowIndex = Math.floor(index / 2);
-        const childX =
-          branchIndex === 0
+        const childX = reports.length === 1
+          ? parentCenterX - layout.nodeWidth / 2
+          : branchIndex === 0
             ? parentCenterX - layout.branchColumnGap / 2 - layout.nodeWidth
             : parentCenterX + layout.branchColumnGap / 2;
 
-        markVisible(report, rowIndex + 1 + leafRowIndex);
         positions.set(report.id, {
           id: report.id,
           x: childX,
@@ -506,23 +532,32 @@ const buildFocusedLaneOrgLayout = (data: OrgData, expandedIds: Set<string>, focu
     });
   };
 
-  contextRows.forEach((row, rowIndex) => {
-    let cursorX = centerX - contextRowWidth(row) / 2;
-    row.forEach((person) => {
-      const width = blockWidth(person);
-      placeSubtree(person, cursorX, rowIndex);
-      cursorX += width + blockGap;
-    });
-  });
+  const roots = sortReports(
+    [...visibleIds]
+      .map((personId) => byId[personId])
+      .filter((person): person is PersonRecord => Boolean(person) && (!person.parentId || !visibleIds.has(person.parentId)))
+  ).sort((a, b) => (a.id === data.rootId ? -1 : b.id === data.rootId ? 1 : 0));
+  let rootX = layout.marginX;
 
-  return [...visibleIds].flatMap((personId) => {
+  if (roots.length === 0 && byId[data.rootId]) {
+    roots.push(byId[data.rootId]);
+  }
+
+  for (const root of roots) {
+    placeSubtree(root, rootX, 0);
+    rootX += blockWidth(root) + blockGap;
+  }
+
+  return data.people.flatMap((person) => {
+    if (!visibleIds.has(person.id)) return [];
+    const personId = person.id;
     const position = positions.get(personId);
     return position ? [position] : [];
   });
 };
 
 export const buildOrgLayout = (data: OrgData, expandedIds: Set<string>, lightMode: boolean, focusId: string | null): LayoutNode[] =>
-  buildFocusedLaneOrgLayout(data, expandedIds, focusId, lightMode);
+  buildFocusedTreeOrgLayout(data, expandedIds, focusId, lightMode);
 
 export const buildLocationLayout = (people: PersonRecord[], lightMode: boolean): LayoutNode[] => {
   const layout = lightMode ? LOCATION_LIGHT_LAYOUT : LOCATION_STANDARD_LAYOUT;
@@ -774,11 +809,12 @@ export const buildOrgFlow = ({
       const parentCenterX = parentPosition ? parentPosition.x + (lightMode ? FOCUSED_LIGHT_LAYOUT.nodeWidth : FOCUSED_STANDARD_LAYOUT.nodeWidth) / 2 : 0;
       const childCenterX = childPosition ? childPosition.x + (lightMode ? FOCUSED_LIGHT_LAYOUT.nodeWidth : FOCUSED_STANDARD_LAYOUT.nodeWidth) / 2 : 0;
       const horizontalDelta = childCenterX - parentCenterX;
-      const parentReports = childrenMap[person.parentId!] ?? [];
+      const parentReports = (childrenMap[person.parentId!] ?? []).filter((report) => visibleIds.has(report.id));
       const isCompactBranch =
-        expandedIds.has(person.parentId!) &&
         parentReports.length > 0 &&
-        !parentReports.some((report) => expandedIds.has(report.id));
+        !parentReports.some((report) =>
+          (childrenMap[report.id] ?? []).some((child) => visibleIds.has(child.id))
+        );
       const targetHandle =
         isCompactBranch && Math.abs(horizontalDelta) >= 40
           ? horizontalDelta < 0

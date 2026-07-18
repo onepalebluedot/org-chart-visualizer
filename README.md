@@ -5,6 +5,7 @@ Single-page org chart editor built with React, TypeScript, Vite, and React Flow.
 ## Current App Features
 
 - Focused Org view with a Glean-style canvas, reporting lines, reporting chain, peer row, and direct reports for the selected person
+- Collision-safe recursive layout that assigns each visible card one position and reserves space for every open branch
 - Expanded lowest-level teams render as balanced left/right branches under their manager
 - Direct reporting relationships use explicit connector lines with stronger focus-path styling
 - Location view grouped by `Location`
@@ -222,8 +223,10 @@ then the default Vite config is usually fine.
 - Click a card to edit it in the left panel.
 - In `Org view`, selecting a card focuses the canvas around that person, their reporting chain, their peers, and their visible reports.
 - Lowest-level manager teams can remain open together for side-by-side comparison.
-- Clicking an IC in an expanded lowest-level team selects it without changing the team branch layout.
+- Clicking a person without direct reports selects them without moving their team; the parent team remains the layout focus.
 - Clicking cards does not collapse other expanded branches; use `Collapse selected` or `Collapse all` when you want to close branches.
+- Adding a person or leader preserves branches that are already expanded.
+- The initial hierarchy fits itself to the available canvas on desktop and mobile, while pan and zoom remain available afterward.
 - The top bar has separate `Add` controls for Person, Role, and Leader, plus structure controls for collapse/expand.
 - In `View mode`, the canvas is for browsing.
 - In `Drag edit`, left-drag edits cards and middle mouse drag pans the canvas.
@@ -240,5 +243,5 @@ then the default Vite config is usually fine.
 - [src/data/mockOrg.ts](/Users/johnvincent/Org%20Chart%20Visualizer/src/data/mockOrg.ts): default org data entry point
 - [src/data/publicDemoOrg.json](/Users/johnvincent/Org%20Chart%20Visualizer/src/data/publicDemoOrg.json): public sample load file
 - [src/types.ts](/Users/johnvincent/Org%20Chart%20Visualizer/src/types.ts): shared types
-- [src/utils/org.ts](/Users/johnvincent/Org%20Chart%20Visualizer/src/utils/org.ts): normalization, layout, filtering, and JSON serialization
+- [src/utils/org.ts](/Users/johnvincent/Org%20Chart%20Visualizer/src/utils/org.ts): normalization, collision-safe focused-tree layout, filtering, and JSON serialization
 - [src/styles.css](/Users/johnvincent/Org%20Chart%20Visualizer/src/styles.css): UI and canvas styling

@@ -250,10 +250,6 @@ export default function App() {
     };
   }, [orgData.people]);
   const orgChildrenMap = useMemo(() => childrenByParent(orgData.people), [orgData.people]);
-  const isLowestLevelTeamManager = (personId: string): boolean => {
-    const reports = orgChildrenMap[personId] ?? [];
-    return reports.length > 0 && reports.every((report) => (orgChildrenMap[report.id] ?? []).length === 0);
-  };
 
   const captureViewportAnchor = () => {
     if (viewMode !== "org") return;
@@ -441,7 +437,7 @@ export default function App() {
     setSelectedId(parentId);
     if (!canvasLocked) {
       setOrgFocusId(parentId ?? nextPerson.id);
-      setExpandedIds(parentId ? new Set([parentId]) : new Set());
+      setExpandedIds((current) => new Set(current).add(parentId));
     }
   };
 
@@ -481,7 +477,7 @@ export default function App() {
     setSelectedId(nextLeader.id);
     if (!canvasLocked) {
       setOrgFocusId(nextLeader.id);
-      setExpandedIds(new Set([nextLeader.id, currentRoot.id]));
+      setExpandedIds((current) => new Set([...current, nextLeader.id, currentRoot.id]));
     }
   };
 
@@ -662,18 +658,15 @@ export default function App() {
     const hasDirectReports = (orgChildrenMap[personId] ?? []).length > 0;
     if (!canvasLocked && viewMode === "org") {
       captureViewportAnchor();
-      if (isLowestLevelTeamManager(personId)) {
-        setExpandedIds((current) => new Set(current).add(personId));
-      } else if (!hasDirectReports && parentId && isLowestLevelTeamManager(parentId)) {
+      if (!hasDirectReports && parentId) {
         setOrgFocusId(parentId);
-        setExpandedIds((current) => new Set(current).add(parentId));
+        setExpandedIds((current) => (current.has(parentId) ? current : new Set(current).add(parentId)));
       } else {
         setOrgFocusId(personId);
         setExpandedIds((current) => {
+          if (!hasDirectReports || current.has(personId)) return current;
           const next = new Set(current);
-          if (hasDirectReports) {
-            next.add(personId);
-          }
+          next.add(personId);
           return next;
         });
       }
@@ -854,8 +847,16 @@ export default function App() {
     setDraggedNodeId(null);
   };
 
+  const getCollapseTargetId = (): string | null => {
+    if (canvasLocked) return orgFocusId;
+    if (selectedPerson && (orgChildrenMap[selectedPerson.id] ?? []).length > 0) {
+      return selectedPerson.id;
+    }
+    return orgFocusId;
+  };
+
   const toggleCollapse = () => {
-    const targetId = canvasLocked ? orgFocusId : selectedPerson?.id;
+    const targetId = getCollapseTargetId();
     if (!targetId) return;
     if ((orgChildrenMap[targetId] ?? []).length === 0) return;
 
@@ -903,7 +904,7 @@ export default function App() {
       })),
     [activeNodes, isDragEditing, orgData.rootId]
   );
-  const collapseTargetId = canvasLocked ? orgFocusId : selectedPerson?.id;
+  const collapseTargetId = getCollapseTargetId();
   const canCollapseSelection = !!collapseTargetId && (orgChildrenMap[collapseTargetId] ?? []).length > 0;
   const collapseLabel =
     collapseTargetId && canCollapseSelection && expandedIds.has(collapseTargetId) ? "Collapse selected" : "Expand selected";
@@ -1308,8 +1309,10 @@ export default function App() {
             onNodeClick={(_, node) => handleNodeSelection(node)}
             onNodeDrag={isDragEditing ? (viewMode === "org" ? onOrgNodeDrag : onLocationNodeDrag) : undefined}
             onNodeDragStop={isDragEditing ? (viewMode === "org" ? onOrgNodeDragStop : onLocationNodeDragStop) : undefined}
-            minZoom={0.45}
+            minZoom={0.25}
             maxZoom={1.5}
+            fitView
+            fitViewOptions={{ padding: isMobileLayout ? 0.18 : 0.12, minZoom: 0.25, maxZoom: 1 }}
             snapToGrid
             snapGrid={[GRID_SIZE, GRID_SIZE]}
             nodesDraggable={isDragEditing}
