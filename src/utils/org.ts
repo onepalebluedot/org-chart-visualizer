@@ -25,7 +25,25 @@ export interface SpreadsheetImportResult {
 
 interface ImportedRosterPerson extends PersonRecord {
   sourceManagerName: string;
+  sourceParentId: string;
+  sourceRoot: boolean;
 }
+
+export type RosterExportRow = {
+  Name: string;
+  Role: string;
+  "Manager Or IC": PersonRecord["managerOrIc"];
+  "Full Time or Contractor": string;
+  Title: string;
+  Manager: string;
+  Level: number;
+  Location: string;
+  "Role Type": RoleType;
+  ID: string;
+  "Parent ID": string;
+  "Sort Order": number;
+  Root: "Yes" | "";
+};
 
 export interface OrgNodeData extends Record<string, unknown> {
   person: PersonRecord;
@@ -105,6 +123,14 @@ const rosterHeaderAliases: Record<(typeof REQUIRED_ROSTER_COLUMNS)[number], stri
   Location: ["location"]
 };
 
+const OPTIONAL_ROSTER_COLUMNS = {
+  "Role Type": ["roletype", "cardtype"],
+  ID: ["id", "personid"],
+  "Parent ID": ["parentid", "managerid"],
+  "Sort Order": ["sortorder", "order"],
+  Root: ["root", "isroot"]
+} as const;
+
 const slugify = (value: string): string =>
   value
     .trim()
@@ -125,6 +151,39 @@ const resolveRosterValue = (
   const key = keyMap[column];
   if (!key) return "";
   return coerceSpreadsheetValue(row[key]);
+};
+
+const resolveOptionalRosterValue = (
+  row: Record<string, unknown>,
+  normalizedKeyLookup: Map<string, string>,
+  column: keyof typeof OPTIONAL_ROSTER_COLUMNS
+): string => {
+  const key = OPTIONAL_ROSTER_COLUMNS[column]
+    .map((alias) => normalizedKeyLookup.get(alias) ?? null)
+    .find(Boolean);
+  return key ? coerceSpreadsheetValue(row[key]) : "";
+};
+
+export const buildRosterExportRows = (data: OrgData): RosterExportRow[] => {
+  const byId = peopleById(data.people);
+
+  return [...data.people]
+    .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0) || a.name.localeCompare(b.name))
+    .map((person) => ({
+      Name: person.name,
+      Role: person.role,
+      "Manager Or IC": person.managerOrIc,
+      "Full Time or Contractor": person.workerType,
+      Title: person.title,
+      Manager: person.parentId ? byId[person.parentId]?.name ?? person.managerName : "",
+      Level: person.level,
+      Location: person.location,
+      "Role Type": person.roleType,
+      ID: person.id,
+      "Parent ID": person.parentId ?? "",
+      "Sort Order": person.sortOrder ?? 0,
+      Root: person.id === data.rootId ? "Yes" : ""
+    }));
 };
 
 export const buildOrgDataFromRosterRows = (
@@ -167,6 +226,11 @@ export const buildOrgDataFromRosterRows = (
     const managerName = resolveRosterValue(row, keyMap, "Manager");
     const levelValue = resolveRosterValue(row, keyMap, "Level");
     const location = resolveRosterValue(row, keyMap, "Location");
+    const sourceId = resolveOptionalRosterValue(row, normalizedKeyLookup, "ID");
+    const sourceRoleType = resolveOptionalRosterValue(row, normalizedKeyLookup, "Role Type");
+    const sourceParentId = resolveOptionalRosterValue(row, normalizedKeyLookup, "Parent ID");
+    const sourceSortOrder = resolveOptionalRosterValue(row, normalizedKeyLookup, "Sort Order");
+    const sourceRoot = resolveOptionalRosterValue(row, normalizedKeyLookup, "Root");
 
     if (![name, role, managerOrIcRaw, workerType, title, managerName, levelValue, location].some(Boolean)) {
       return [];
@@ -177,23 +241,27 @@ export const buildOrgDataFromRosterRows = (
       return [];
     }
 
-    const slug = slugify(name);
-    const count = (idCounts.get(slug) ?? 0) + 1;
-    idCounts.set(slug, count);
+    const preferredId = sourceId || slugify(name);
+    const count = (idCounts.get(preferredId) ?? 0) + 1;
+    idCounts.set(preferredId, count);
     nameCounts.set(name, (nameCounts.get(name) ?? 0) + 1);
 
     const managerOrIc: PersonRecord["managerOrIc"] = managerOrIcRaw.toLowerCase().startsWith("manager")
       ? "Manager"
       : "IC";
-    const roleType =
+    const inferredRoleType =
       name.toLowerCase() === "open role" ? "open-role" : managerOrIc === "Manager" ? "manager" : "ic";
+    const roleType = (["executive", "manager", "ic", "open-role"] as RoleType[]).includes(sourceRoleType as RoleType)
+      ? (sourceRoleType as RoleType)
+      : inferredRoleType;
     const parsedLevel = Number(levelValue);
+    const parsedSortOrder = Number(sourceSortOrder);
 
     return [
       {
-        id: count === 1 ? slug : `${slug}-${count}`,
+        id: count === 1 ? preferredId : `${preferredId}-${count}`,
         parentId: null as string | null,
-        sortOrder: index,
+        sortOrder: Number.isFinite(parsedSortOrder) && sourceSortOrder !== "" ? parsedSortOrder : index,
         name,
         role,
         managerOrIc,
@@ -202,8 +270,10 @@ export const buildOrgDataFromRosterRows = (
         managerName,
         level: Number.isFinite(parsedLevel) ? parsedLevel : 0,
         location: location || "Unassigned",
-        roleType: roleType as PersonRecord["roleType"],
-        sourceManagerName: managerName
+        roleType,
+        sourceManagerName: managerName,
+        sourceParentId,
+        sourceRoot: ["yes", "true", "1"].includes(sourceRoot.toLowerCase())
       }
     ];
   });
@@ -222,7 +292,13 @@ export const buildOrgDataFromRosterRows = (
     }
   });
 
-  const unresolvedManagers = [
+  const idSet = new Set(importedRows.map((person) => person.id));
+  const hasStableHierarchy = Boolean(
+    OPTIONAL_ROSTER_COLUMNS.ID.some((alias) => normalizedKeyLookup.has(alias)) &&
+      OPTIONAL_ROSTER_COLUMNS["Parent ID"].some((alias) => normalizedKeyLookup.has(alias))
+  );
+
+  const unresolvedManagers = hasStableHierarchy ? [] : [
     ...new Set(
       importedRows
         .map((person) => person.sourceManagerName)
@@ -230,16 +306,18 @@ export const buildOrgDataFromRosterRows = (
     )
   ].sort((a, b) => a.localeCompare(b));
 
-  const rootCandidates = importedRows.filter(
-    (person) =>
-      !person.sourceManagerName || !nameToId.has(person.sourceManagerName) || person.sourceManagerName === person.name
+  const rootCandidates = importedRows.filter((person) =>
+    hasStableHierarchy
+      ? person.sourceRoot || !person.sourceParentId || !idSet.has(person.sourceParentId)
+      : !person.sourceManagerName || !nameToId.has(person.sourceManagerName) || person.sourceManagerName === person.name
   );
   const rankedRootCandidates = [...rootCandidates].sort((a, b) => {
     if (b.level !== a.level) return b.level - a.level;
     if (a.managerOrIc !== b.managerOrIc) return a.managerOrIc === "Manager" ? -1 : 1;
     return (a.sortOrder ?? 0) - (b.sortOrder ?? 0);
   });
-  const root = rankedRootCandidates[0] ?? importedRows[0];
+  const explicitRoot = importedRows.find((person) => person.sourceRoot);
+  const root = explicitRoot ?? rankedRootCandidates[0] ?? importedRows[0];
 
   if (rootCandidates.length > 1) {
     warnings.push(`Multiple top-level candidates found. Using ${root.name} as the root.`);
@@ -247,7 +325,7 @@ export const buildOrgDataFromRosterRows = (
   if (unresolvedManagers.length > 0) {
     warnings.push(`Some manager names were not found and were attached to the root.`);
   }
-  if (duplicateNames.length > 0) {
+  if (duplicateNames.length > 0 && !hasStableHierarchy) {
     warnings.push("Duplicate names were detected. Unique IDs were generated automatically.");
   }
   if (skippedRows > 0) {
@@ -258,9 +336,11 @@ export const buildOrgDataFromRosterRows = (
     const parentId =
       person.id === root.id
         ? null
-        : person.sourceManagerName && nameToId.has(person.sourceManagerName)
-          ? nameToId.get(person.sourceManagerName)!
-          : root.id;
+        : hasStableHierarchy && person.sourceParentId && idSet.has(person.sourceParentId)
+          ? person.sourceParentId
+          : person.sourceManagerName && nameToId.has(person.sourceManagerName)
+            ? nameToId.get(person.sourceManagerName)!
+            : root.id;
 
     return {
       id: person.id,
@@ -678,7 +758,7 @@ export const normalizeOrgData = (data: OrgData): OrgData => {
 
     const isManagerTrack = person.managerOrIc === "Manager";
     const normalizedRoleType =
-      person.name.trim().toLowerCase() === "open role"
+      person.roleType === "open-role" || person.name.trim().toLowerCase() === "open role"
         ? "open-role"
         : isManagerTrack
           ? "manager"

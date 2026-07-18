@@ -19,6 +19,7 @@ import mockOrgData from "./data/mockOrg";
 import type { OrgData, PersonFormState, PersonRecord, RoleType, ViewMode } from "./types";
 import {
   buildOrgDataFromRosterRows,
+  buildRosterExportRows,
   buildOrgFlow,
   buildLocationFlow,
   childrenByParent,
@@ -71,6 +72,7 @@ const edgeTypes = {
 type InteractionMode = "view" | "drag";
 type CardDensity = "standard" | "light";
 type ImportMessageTone = "error" | "success";
+type SidebarPanel = "view" | "files" | "find";
 
 interface PendingSpreadsheetImport {
   fileName: string;
@@ -154,11 +156,15 @@ export default function App() {
   const [interactionMode, setInteractionMode] = useState<InteractionMode>("view");
   const [cardDensity, setCardDensity] = useState<CardDensity>("standard");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [activeSidebarPanel, setActiveSidebarPanel] = useState<SidebarPanel>("view");
   const [isMobileLayout, setIsMobileLayout] = useState(false);
   const [mobilePanelOpen, setMobilePanelOpen] = useState(false);
+  const [inspectorOpen, setInspectorOpen] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(orgData.rootId);
   const [orgFocusId, setOrgFocusId] = useState<string | null>(orgData.rootId);
   const [canvasLocked, setCanvasLocked] = useState(false);
+  const [cardDetailsEnabled, setCardDetailsEnabled] = useState(false);
+  const [showCanvasGrid, setShowCanvasGrid] = useState(true);
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set([orgData.rootId]));
   const [search, setSearch] = useState("");
   const [orgPreviewPositions, setOrgPreviewPositions] = useState<Record<string, XYPosition>>({});
@@ -177,6 +183,7 @@ export default function App() {
   const canvasFrameRef = useRef<HTMLDivElement | null>(null);
   const reactFlowInstanceRef = useRef<ReactFlowInstance<AppNode> | null>(null);
   const pendingViewportAnchorRef = useRef<ViewportAnchor | null>(null);
+  const dropHighlightTimerRef = useRef<number | null>(null);
   const undoStackRef = useRef<OrgData[]>([]);
   const redoStackRef = useRef<OrgData[]>([]);
   const isLightMode = cardDensity === "light";
@@ -251,6 +258,7 @@ export default function App() {
     };
   }, [orgData.people]);
   const orgChildrenMap = useMemo(() => childrenByParent(orgData.people), [orgData.people]);
+  const selectedDirectReports = selectedPerson ? orgChildrenMap[selectedPerson.id] ?? [] : [];
 
   const captureViewportAnchor = () => {
     if (viewMode !== "org") return;
@@ -342,6 +350,29 @@ export default function App() {
       setMobilePanelOpen(false);
     }
   }, [isMobileLayout]);
+
+  useEffect(() => {
+    if (!inspectorOpen) return;
+
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setInspectorOpen(false);
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [inspectorOpen]);
+
+  useEffect(() => {
+    if (!cardDetailsEnabled) setInspectorOpen(false);
+  }, [cardDetailsEnabled]);
+
+  useEffect(
+    () => () => {
+      if (dropHighlightTimerRef.current !== null) {
+        window.clearTimeout(dropHighlightTimerRef.current);
+      }
+    },
+    []
+  );
 
   useEffect(() => {
     if (interactionMode === "drag") return;
@@ -500,6 +531,7 @@ export default function App() {
       people: current.people.filter((person) => !descendants.has(person.id))
     }));
     setSelectedId(selectedPerson.parentId ?? orgData.rootId);
+    setInspectorOpen(false);
   };
 
   const downloadOrgData = (data: OrgData, fileBaseName = "org-chart") => {
@@ -514,6 +546,42 @@ export default function App() {
 
   const exportJson = () => {
     downloadOrgData(orgData);
+  };
+
+  const exportExcel = async () => {
+    try {
+      const XLSX = await import("xlsx");
+      const worksheet = XLSX.utils.json_to_sheet(buildRosterExportRows(orgData));
+      worksheet["!cols"] = [
+        { wch: 24 },
+        { wch: 18 },
+        { wch: 16 },
+        { wch: 24 },
+        { wch: 30 },
+        { wch: 24 },
+        { wch: 9 },
+        { wch: 18 },
+        { wch: 14 },
+        { wch: 24 },
+        { wch: 24 },
+        { wch: 12 },
+        { wch: 8 }
+      ];
+      worksheet["!autofilter"] = { ref: worksheet["!ref"] ?? "A1:M1" };
+
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, worksheet, "Org Roster");
+      XLSX.writeFile(workbook, `org-chart-${new Date().toISOString().slice(0, 10)}.xlsx`);
+      setImportMessage({
+        tone: "success",
+        text: "Excel roster saved. It can be loaded back with Load Excel/CSV."
+      });
+    } catch (error) {
+      setImportMessage({
+        tone: "error",
+        text: error instanceof Error ? error.message : "The Excel roster could not be saved."
+      });
+    }
   };
 
   const waitForNextPaint = () =>
@@ -652,10 +720,10 @@ export default function App() {
     }
   };
 
-  const handleNodeSelection = (node: AppNode) => {
-    if (node.type === "project") return;
-    const personId = node.data.person.id;
-    const parentId = node.data.person.parentId;
+  const selectPerson = (personId: string) => {
+    const person = orgData.people.find((candidate) => candidate.id === personId);
+    if (!person) return;
+    const parentId = person.parentId;
     const hasDirectReports = (orgChildrenMap[personId] ?? []).length > 0;
     if (!canvasLocked && viewMode === "org") {
       captureViewportAnchor();
@@ -673,9 +741,12 @@ export default function App() {
       }
     }
     setSelectedId(personId);
-    if (isMobileLayout) {
-      setMobilePanelOpen(true);
-    }
+    setInspectorOpen(cardDetailsEnabled);
+  };
+
+  const handleNodeSelection = (node: AppNode) => {
+    if (node.type === "project") return;
+    selectPerson(node.data.person.id);
   };
 
   const detectOrgDropTarget = (
@@ -689,20 +760,38 @@ export default function App() {
       bottom: node.position.y + personCardHeight
     };
 
-    for (const candidate of orgFlow.nodes) {
-      if (candidate.id === sourceId) continue;
+    const movingPerson = orgData.people.find((person) => person.id === sourceId);
+    const sourceCenter = {
+      x: node.position.x + personCardWidth / 2,
+      y: node.position.y + personCardHeight / 2
+    };
+    const candidates = orgFlow.nodes
+      .filter((candidate) => candidate.id !== sourceId)
+      .map((candidate) => ({
+        candidate,
+        distance: Math.hypot(
+          sourceCenter.x - (candidate.position.x + personCardWidth / 2),
+          sourceCenter.y - (candidate.position.y + personCardHeight / 2)
+        )
+      }))
+      .sort((a, b) => a.distance - b.distance);
+    const horizontalProximity = personCardWidth * 0.2;
+    const verticalProximity = personCardHeight * 0.24;
 
+    for (const { candidate } of candidates) {
       const overlaps =
-        nodeRect.right > candidate.position.x &&
-        nodeRect.left < candidate.position.x + personCardWidth &&
-        nodeRect.bottom > candidate.position.y &&
-        nodeRect.top < candidate.position.y + personCardHeight;
+        nodeRect.right > candidate.position.x - horizontalProximity &&
+        nodeRect.left < candidate.position.x + personCardWidth + horizontalProximity &&
+        nodeRect.bottom > candidate.position.y - verticalProximity &&
+        nodeRect.top < candidate.position.y + personCardHeight + verticalProximity;
 
       if (!overlaps) continue;
 
-      const movingPerson = orgData.people.find((person) => person.id === sourceId);
       const candidatePerson = orgData.people.find((person) => person.id === candidate.id);
-      const overlapWidth = Math.min(nodeRect.right, candidate.position.x + personCardWidth) - Math.max(nodeRect.left, candidate.position.x);
+      const overlapWidth = Math.max(
+        0,
+        Math.min(nodeRect.right, candidate.position.x + personCardWidth) - Math.max(nodeRect.left, candidate.position.x)
+      );
       const overlapRatio = overlapWidth / personCardWidth;
 
       const isPeerManagerReorder =
@@ -743,6 +832,10 @@ export default function App() {
 
   const onOrgNodeDrag: OnNodeDrag<AppNode> = (_, node) => {
     if (interactionMode !== "drag") return;
+    if (dropHighlightTimerRef.current !== null) {
+      window.clearTimeout(dropHighlightTimerRef.current);
+      dropHighlightTimerRef.current = null;
+    }
     setDraggedNodeId(node.id);
     const target = detectOrgDropTarget(node);
     setDropTargetId(target.valid);
@@ -773,10 +866,17 @@ export default function App() {
       }));
     }
     setOrgPreviewPositions({});
-    setDropTargetId(null);
+    setDropTargetId(target.valid);
     setInvalidTargetId(null);
     setReorderTarget(null);
     setDraggedNodeId(null);
+
+    if (target.valid) {
+      dropHighlightTimerRef.current = window.setTimeout(() => {
+        setDropTargetId((current) => (current === target.valid ? null : current));
+        dropHighlightTimerRef.current = null;
+      }, 1100);
+    }
   };
 
   const detectLocationDropTarget = (node: AppNode): string | null => {
@@ -892,6 +992,10 @@ export default function App() {
   }, [orgData.people]);
 
   const isDragEditing = interactionMode === "drag";
+  const orgDropTargetName =
+    viewMode === "org" && dropTargetId
+      ? orgData.people.find((person) => person.id === dropTargetId)?.name ?? null
+      : null;
   const activeNodes = viewMode === "org" ? visibleOrgNodes : visibleLocationNodes;
   const activeEdges = viewMode === "org" ? visibleOrgEdges : visibleLocationEdges;
   const renderedNodes = useMemo(
@@ -938,263 +1042,180 @@ export default function App() {
           isMobileLayout && mobilePanelOpen ? "is-mobile-open" : ""
         }`}
       >
-        <div className="sidebar-toggle-row">
+        <div className="sidebar-brand-row">
+          <div className="sidebar-brand" aria-label="OrgGraph Visualizer">
+            <span className="brand-mark">OG</span>
+            {sidebarCollapsed && !isMobileLayout ? null : (
+              <span className="brand-wordmark">
+                <strong>OrgGraph</strong>
+                <small>Visualizer</small>
+              </span>
+            )}
+          </div>
           <button
             className="sidebar-toggle"
+            aria-label={isMobileLayout ? "Close workspace panel" : sidebarCollapsed ? "Expand workspace panel" : "Collapse workspace panel"}
             onClick={() => {
               if (isMobileLayout) {
-                setMobilePanelOpen((current) => !current);
+                setMobilePanelOpen(false);
                 return;
               }
               setSidebarCollapsed((current) => !current);
             }}
           >
-            {isMobileLayout ? (mobilePanelOpen ? "Close panel" : "Open panel") : sidebarCollapsed ? "Show panel" : "Hide panel"}
+            {isMobileLayout ? "×" : sidebarCollapsed ? "›" : "‹"}
           </button>
         </div>
 
-        {sidebarCollapsed && !isMobileLayout ? (
-          <div className="sidebar-collapsed-content">
-            <div className="collapsed-brand">
-              <span>OC</span>
-            </div>
-            <div className="collapsed-meta">
-              <strong>{viewMode === "org" ? "Org" : "Location"}</strong>
-              <span>{orgData.people.length} roles</span>
-            </div>
-          </div>
-        ) : (
-          <>
-        <div className="sidebar-section">
-          <p className="eyebrow">Workspace</p>
-          <h1>Org Chart Visualizer</h1>
-          <p className="lede">
-            Local planning tool for org design, staffing placeholders, and coverage planning across hierarchy and
-            location views.
-          </p>
-        </div>
+        <nav className="sidebar-nav" aria-label="Workspace controls">
+          {(["view", "files", "find"] as SidebarPanel[]).map((panel) => (
+            <button
+              key={panel}
+              className={activeSidebarPanel === panel ? "is-active" : ""}
+              aria-current={activeSidebarPanel === panel ? "page" : undefined}
+              title={panel === "view" ? "View settings" : panel === "files" ? "Files and export" : "Search and locations"}
+              onClick={() => {
+                setActiveSidebarPanel(panel);
+                if (!isMobileLayout) setSidebarCollapsed(false);
+              }}
+            >
+              <SidebarIcon name={panel} />
+              {sidebarCollapsed && !isMobileLayout ? null : (
+                <span>{panel === "view" ? "View" : panel === "files" ? "Files" : "Find"}</span>
+              )}
+            </button>
+          ))}
+        </nav>
 
-        <div className="sidebar-section selected-card-section">
-          <div className="section-title-row">
-            <h2>Selected card</h2>
-            {selectedPerson && selectedPerson.id !== orgData.rootId ? (
-              <button className="danger-link" onClick={deleteSelected}>
-                Remove
-              </button>
+        {sidebarCollapsed && !isMobileLayout ? null : (
+          <div className="sidebar-layer">
+            {activeSidebarPanel === "view" ? (
+              <>
+                <div className="layer-heading">
+                  <p className="eyebrow">Workspace</p>
+                  <h1>Chart settings</h1>
+                  <p>Control how the organization is grouped and displayed.</p>
+                </div>
+                <div className="control-stack">
+                  <div className="control-block">
+                    <span className="control-label">Perspective</span>
+                    <div className="segmented-control">
+                      <button onClick={() => setViewMode("org")} className={viewMode === "org" ? "is-active" : ""}>Org</button>
+                      <button onClick={() => setViewMode("location")} className={viewMode === "location" ? "is-active" : ""}>Location</button>
+                    </div>
+                  </div>
+                  <div className="control-block">
+                    <span className="control-label">Card detail</span>
+                    <div className="segmented-control">
+                      <button onClick={() => setCardDensity("standard")} className={cardDensity === "standard" ? "is-active" : ""}>Full</button>
+                      <button onClick={() => setCardDensity("light")} className={cardDensity === "light" ? "is-active" : ""}>Light</button>
+                    </div>
+                  </div>
+                  <details className="control-disclosure">
+                    <summary>Canvas options</summary>
+                    <div className="disclosure-actions">
+                      <button
+                        className={cardDetailsEnabled ? "selected-action" : ""}
+                        aria-pressed={cardDetailsEnabled}
+                        onClick={() => setCardDetailsEnabled((current) => !current)}
+                      >
+                        Edit card details: {cardDetailsEnabled ? "On" : "Off"}
+                      </button>
+                      <button onClick={() => setShowCanvasGrid((current) => !current)}>{showCanvasGrid ? "Hide grid" : "Show grid"}</button>
+                      <button onClick={() => setCanvasLocked((current) => !current)}>{canvasLocked ? "Unlock focus" : "Lock focus"}</button>
+                    </div>
+                  </details>
+                  <details className="control-disclosure mobile-structure-controls">
+                    <summary>Add and structure</summary>
+                    <div className="disclosure-actions">
+                      <button onClick={() => addPerson("ic")}>Add person</button>
+                      <button onClick={() => addPerson("open-role")}>Add open role</button>
+                      <button onClick={addLeader}>Add leader</button>
+                      <button onClick={toggleCollapse} disabled={!canCollapseSelection}>{collapseLabel}</button>
+                      <button onClick={collapseAll}>Collapse all</button>
+                      <button onClick={expandAll}>Expand all</button>
+                    </div>
+                  </details>
+                </div>
+              </>
+            ) : null}
+
+            {activeSidebarPanel === "files" ? (
+              <>
+                <div className="layer-heading">
+                  <p className="eyebrow">Data</p>
+                  <h1>Files & export</h1>
+                  <p>Save a reusable snapshot or prepare the current view for presentation.</p>
+                </div>
+                <details className="control-disclosure" open>
+                  <summary>Save and print</summary>
+                  <div className="toolbar-grid disclosure-actions">
+                    <button onClick={exportJson}>Save JSON</button>
+                    <button onClick={() => void exportExcel()}>Save Excel</button>
+                    <button className="print-export-button primary" onClick={() => void printCurrentView()} disabled={isPrinting}>
+                      {isPrinting ? "Preparing image" : "Print image"}
+                    </button>
+                  </div>
+                </details>
+                <details className="control-disclosure" open={Boolean(pendingSpreadsheetImport)}>
+                  <summary>Load data</summary>
+                  <div className="toolbar-grid disclosure-actions">
+                    <button onClick={() => jsonFileInputRef.current?.click()}>Load JSON</button>
+                    <button onClick={() => spreadsheetFileInputRef.current?.click()}>Load Excel/CSV</button>
+                  </div>
+                  <p className="muted import-note">Spreadsheet columns: Name, Role, Manager or IC, Title, Manager, Level, and Location.</p>
+                </details>
+                {printMessage ? <p className={`import-status ${printMessage.tone === "error" ? "is-error" : "is-success"}`}>{printMessage.text}</p> : null}
+                {importMessage ? <p className={`import-status ${importMessage.tone === "error" ? "is-error" : "is-success"}`}>{importMessage.text}</p> : null}
+                {pendingSpreadsheetImport ? (
+                  <div className="import-preview">
+                    <div className="import-preview-grid">
+                      <span>File</span><strong>{pendingSpreadsheetImport.fileName}</strong>
+                      <span>Sheet</span><strong>{pendingSpreadsheetImport.preview.sheetName}</strong>
+                      <span>Rows</span><strong>{pendingSpreadsheetImport.preview.rowCount}</strong>
+                      <span>Imported</span><strong>{pendingSpreadsheetImport.preview.importedCount}</strong>
+                      <span>Root</span><strong>{pendingSpreadsheetImport.preview.rootName}</strong>
+                    </div>
+                    {pendingSpreadsheetImport.preview.warnings.length > 0 ? (
+                      <div className="import-preview-block"><span className="field-label">Warnings</span><ul className="import-list">{pendingSpreadsheetImport.preview.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul></div>
+                    ) : null}
+                    {pendingSpreadsheetImport.preview.duplicateNames.length > 0 ? (
+                      <div className="import-preview-block"><span className="field-label">Duplicate names</span><p className="muted">{pendingSpreadsheetImport.preview.duplicateNames.join(", ")}</p></div>
+                    ) : null}
+                    {pendingSpreadsheetImport.preview.unresolvedManagers.length > 0 ? (
+                      <div className="import-preview-block"><span className="field-label">Managers not found</span><p className="muted">{pendingSpreadsheetImport.preview.unresolvedManagers.join(", ")}</p></div>
+                    ) : null}
+                    <div className="toolbar-grid compact-toolbar">
+                      <button className="primary" onClick={() => { setImportMessage(null); loadOrgData(pendingSpreadsheetImport.data); setPendingSpreadsheetImport(null); }}>Load imported data</button>
+                      <button onClick={() => downloadOrgData(pendingSpreadsheetImport.data, pendingSpreadsheetImport.fileName.replace(/\.[^.]+$/, "") || "converted-org")}>Download JSON</button>
+                    </div>
+                    <button className="clear-button" onClick={() => setPendingSpreadsheetImport(null)}>Clear preview</button>
+                  </div>
+                ) : null}
+              </>
+            ) : null}
+
+            {activeSidebarPanel === "find" ? (
+              <>
+                <div className="layer-heading">
+                  <p className="eyebrow">Directory</p>
+                  <h1>Find people</h1>
+                  <p>Filter by name, role, title, manager, or location.</p>
+                </div>
+                <label className="search-field" htmlFor="search">
+                  <span>Search</span>
+                  <input id="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search the organization" />
+                </label>
+                <div className="location-summary">
+                  <div className="section-title-row"><h2>Locations</h2><span>{locationSummary.length}</span></div>
+                  <div className="project-list">
+                    {locationSummary.map(([location, count]) => <div key={location} className="project-pill"><span>{location}</span><strong>{count}</strong></div>)}
+                  </div>
+                </div>
+              </>
             ) : null}
           </div>
-          {selectedPerson ? (
-            <div className="editor-form">
-              <label>
-                <span>Name</span>
-                <input
-                  value={formState.name}
-                  onChange={(event) => applyForm({ ...formState, name: event.target.value })}
-                />
-              </label>
-              <label>
-                <span>Role</span>
-                <input
-                  value={formState.role}
-                  onChange={(event) => applyForm({ ...formState, role: event.target.value })}
-                />
-              </label>
-              <label>
-                <span>Manager or IC</span>
-                <select
-                  value={formState.managerOrIc}
-                  onChange={(event) =>
-                    applyForm({ ...formState, managerOrIc: event.target.value as PersonFormState["managerOrIc"] })
-                  }
-                >
-                  <option value="Manager">Manager</option>
-                  <option value="IC">IC</option>
-                </select>
-              </label>
-              <label>
-                <span>Full Time or Contractor</span>
-                <input
-                  value={formState.workerType}
-                  onChange={(event) => applyForm({ ...formState, workerType: event.target.value })}
-                />
-              </label>
-              <label>
-                <span>Title</span>
-                <input
-                  value={formState.title}
-                  onChange={(event) => applyForm({ ...formState, title: event.target.value })}
-                />
-              </label>
-              <label>
-                <span>Manager</span>
-                <input value={formState.managerName} readOnly />
-              </label>
-              <label>
-                <span>Level</span>
-                <input
-                  value={formState.level}
-                  inputMode="numeric"
-                  onChange={(event) => handleLevelInputChange(event.target.value)}
-                  onBlur={commitLevelInput}
-                />
-              </label>
-              <label>
-                <span>Location</span>
-                <input
-                  value={formState.location}
-                  onChange={(event) => applyForm({ ...formState, location: event.target.value })}
-                />
-              </label>
-            </div>
-          ) : (
-            <p className="muted">Select a person card to edit details.</p>
-          )}
-        </div>
-
-        <div className="sidebar-section">
-          <p className="section-kicker">Canvas</p>
-          <div className="toolbar-grid">
-            <button
-              onClick={() => setInteractionMode("view")}
-              className={interactionMode === "view" ? "selected-action" : ""}
-            >
-              View mode
-            </button>
-            <button
-              onClick={() => setInteractionMode("drag")}
-              className={interactionMode === "drag" ? "selected-action" : ""}
-            >
-              Drag edit
-            </button>
-            <button onClick={() => setViewMode("org")} className={viewMode === "org" ? "selected-action" : ""}>
-              Org view
-            </button>
-            <button onClick={() => setViewMode("location")} className={viewMode === "location" ? "selected-action" : ""}>
-              Location view
-            </button>
-            <button onClick={() => setCardDensity("standard")} className={cardDensity === "standard" ? "selected-action" : ""}>
-              Full cards
-            </button>
-            <button onClick={() => setCardDensity("light")} className={cardDensity === "light" ? "selected-action" : ""}>
-              Light view
-            </button>
-          </div>
-        </div>
-
-        <div className="sidebar-section">
-          <p className="section-kicker">Files</p>
-          <div className="toolbar-grid">
-            <button onClick={exportJson}>Save</button>
-            <button onClick={() => jsonFileInputRef.current?.click()}>Load JSON</button>
-            <button onClick={() => spreadsheetFileInputRef.current?.click()}>Import spreadsheet</button>
-            <button onClick={() => void printCurrentView()} disabled={isPrinting}>
-              {isPrinting ? "Preparing image" : "Print image"}
-            </button>
-          </div>
-          <p className="muted import-note">
-            Expected columns: Name, Role, Manager Or IC, Full Time or Contractor, Title, Manager, Level, Location.
-          </p>
-          {printMessage ? (
-            <p className={`import-status ${printMessage.tone === "error" ? "is-error" : "is-success"}`}>
-              {printMessage.text}
-            </p>
-          ) : null}
-          {importMessage ? (
-            <p className={`import-status ${importMessage.tone === "error" ? "is-error" : "is-success"}`}>
-              {importMessage.text}
-            </p>
-          ) : null}
-          {pendingSpreadsheetImport ? (
-            <div className="import-preview">
-              <div className="import-preview-grid">
-                <span>File</span>
-                <strong>{pendingSpreadsheetImport.fileName}</strong>
-                <span>Sheet</span>
-                <strong>{pendingSpreadsheetImport.preview.sheetName}</strong>
-                <span>Rows</span>
-                <strong>{pendingSpreadsheetImport.preview.rowCount}</strong>
-                <span>Imported</span>
-                <strong>{pendingSpreadsheetImport.preview.importedCount}</strong>
-                <span>Root</span>
-                <strong>{pendingSpreadsheetImport.preview.rootName}</strong>
-              </div>
-              {pendingSpreadsheetImport.preview.warnings.length > 0 ? (
-                <div className="import-preview-block">
-                  <span className="field-label">Warnings</span>
-                  <ul className="import-list">
-                    {pendingSpreadsheetImport.preview.warnings.map((warning) => (
-                      <li key={warning}>{warning}</li>
-                    ))}
-                  </ul>
-                </div>
-              ) : null}
-              {pendingSpreadsheetImport.preview.duplicateNames.length > 0 ? (
-                <div className="import-preview-block">
-                  <span className="field-label">Duplicate names</span>
-                  <p className="muted">{pendingSpreadsheetImport.preview.duplicateNames.join(", ")}</p>
-                </div>
-              ) : null}
-              {pendingSpreadsheetImport.preview.unresolvedManagers.length > 0 ? (
-                <div className="import-preview-block">
-                  <span className="field-label">Managers not found</span>
-                  <p className="muted">{pendingSpreadsheetImport.preview.unresolvedManagers.join(", ")}</p>
-                </div>
-              ) : null}
-              <div className="toolbar-grid compact-toolbar">
-                <button
-                  onClick={() => {
-                    setImportMessage(null);
-                    loadOrgData(pendingSpreadsheetImport.data);
-                    setPendingSpreadsheetImport(null);
-                  }}
-                  className="selected-action"
-                >
-                  Load imported data
-                </button>
-                <button
-                  onClick={() =>
-                    downloadOrgData(
-                      pendingSpreadsheetImport.data,
-                      pendingSpreadsheetImport.fileName.replace(/\.[^.]+$/, "") || "converted-org"
-                    )
-                  }
-                >
-                  Download JSON
-                </button>
-              </div>
-            </div>
-          ) : null}
-          {pendingSpreadsheetImport ? (
-            <button className="clear-button" onClick={() => setPendingSpreadsheetImport(null)}>
-              Clear import preview
-            </button>
-          ) : null}
-        </div>
-
-        <div className="sidebar-section">
-          <p className="section-kicker">Search</p>
-          <label className="field-label" htmlFor="search">
-            Search
-          </label>
-          <input
-            id="search"
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-            placeholder="Name, role, title, manager, location"
-          />
-        </div>
-
-        <div className="sidebar-section">
-          <h2>Locations</h2>
-          <div className="project-list">
-            {locationSummary.map(([location, count]) => (
-              <div key={location} className="project-pill">
-                <span>{location}</span>
-                <strong>{count}</strong>
-              </div>
-            ))}
-          </div>
-        </div>
+        )}
 
         <input
           ref={jsonFileInputRef}
@@ -1222,23 +1243,28 @@ export default function App() {
             event.currentTarget.value = "";
           }}
         />
-          </>
-        )}
       </aside>
 
       <main className="canvas-shell">
         <div className="canvas-header">
           <div className="canvas-title-block">
             <p className="eyebrow">View</p>
-            <h2>{viewMode === "org" ? "Reporting hierarchy" : "Location grouping"}</h2>
+            <div className="canvas-heading-row">
+              <h2>{viewMode === "org" ? "Reporting hierarchy" : "Location grouping"}</h2>
+              <div className="mode-toggle" aria-label="Canvas interaction mode">
+                <button className={!isDragEditing ? "is-active" : ""} onClick={() => setInteractionMode("view")}>
+                  View
+                </button>
+                <button className={isDragEditing ? "is-active" : ""} onClick={() => setInteractionMode("drag")}>
+                  Drag edit
+                </button>
+              </div>
+            </div>
             {isMobileLayout ? (
               <div className="mobile-quick-actions">
-                <button onClick={() => setMobilePanelOpen(true)}>Panel</button>
+                <button onClick={() => setMobilePanelOpen(true)}>Workspace</button>
                 <button onClick={() => setViewMode((current) => (current === "org" ? "location" : "org"))}>
                   {viewMode === "org" ? "Location view" : "Org view"}
-                </button>
-                <button onClick={() => setInteractionMode((current) => (current === "view" ? "drag" : "view"))}>
-                  {isDragEditing ? "View mode" : "Drag edit"}
                 </button>
                 <button onClick={() => setCardDensity((current) => (current === "standard" ? "light" : "standard"))}>
                   {isLightMode ? "Full cards" : "Light view"}
@@ -1279,14 +1305,20 @@ export default function App() {
               {roleSummary.managers} managers · {roleSummary.individualContributors} IC · {roleSummary.openRoles} open
             </span>
             {search ? <span>{filteredIds.size} matching</span> : null}
-            <span>{isDragEditing ? "Drag editing enabled" : "Pan and inspect mode"}</span>
+            <span>
+              {isDragEditing
+                ? "Drag cards · pan empty canvas"
+                : cardDetailsEnabled
+                  ? "Select cards to inspect"
+                  : "Select cards to highlight paths"}
+            </span>
             {draggedNodeId ? (
               <span className="drop-hint">
                 {reorderTarget
                   ? `Release to move team ${reorderTarget.placement === "before" ? "left" : "right"}`
                   : dropTargetId
                   ? viewMode === "org"
-                    ? "Release to reassign reporting line"
+                    ? `Release to place under ${orgDropTargetName ?? "this person"}`
                     : "Release to update location"
                   : invalidTargetId
                     ? "Invalid drop target"
@@ -1300,7 +1332,7 @@ export default function App() {
           ref={canvasFrameRef}
           className={`canvas-frame ${isDragEditing ? "is-drag-editing" : "is-viewing"} ${
             viewMode === "org" ? "is-org-view" : "is-location-view"
-          } ${isPrinting ? "is-exporting" : ""}`}
+          } ${showCanvasGrid ? "has-grid" : "is-grid-hidden"} ${isPrinting ? "is-exporting" : ""}`}
         >
           <ReactFlow<AppNode>
             nodes={renderedNodes}
@@ -1322,7 +1354,7 @@ export default function App() {
             zoomOnScroll
             zoomOnPinch
             panOnScroll={false}
-            panOnDrag={isDragEditing ? (isMobileLayout ? true : [1]) : true}
+            panOnDrag={isDragEditing ? (isMobileLayout ? true : [0, 1]) : true}
             autoPanOnNodeFocus={false}
             selectionOnDrag={false}
             selectNodesOnDrag={false}
@@ -1335,11 +1367,26 @@ export default function App() {
             <Panel position="top-right">
               <div className="canvas-chip-row">
                 <button
+                  className={`canvas-edit-button ${cardDetailsEnabled ? "is-active" : ""}`}
+                  aria-pressed={cardDetailsEnabled}
+                  onClick={() => setCardDetailsEnabled((current) => !current)}
+                  type="button"
+                >
+                  Edit details: {cardDetailsEnabled ? "On" : "Off"}
+                </button>
+                <button
                   className={`canvas-lock-button ${canvasLocked ? "is-locked" : ""}`}
                   onClick={() => setCanvasLocked((current) => !current)}
                   type="button"
                 >
                   {canvasLocked ? "Unlock focus" : "Lock focus"}
+                </button>
+                <button
+                  className={`canvas-grid-button ${showCanvasGrid ? "" : "is-grid-hidden"}`}
+                  onClick={() => setShowCanvasGrid((current) => !current)}
+                  type="button"
+                >
+                  {showCanvasGrid ? "Hide grid" : "Show grid"}
                 </button>
                 <div className="view-chip">
                   {viewMode === "org" ? "Hierarchy view" : "Location view"} · {isDragEditing ? "Drag edit" : "View"}
@@ -1357,16 +1404,168 @@ export default function App() {
                 </button>
               </div>
             </Panel>
-            <Background
-              color={viewMode === "org" ? "rgba(49, 66, 245, 0.08)" : "#d8dde6"}
-              variant={BackgroundVariant.Dots}
-              gap={viewMode === "org" ? 28 : 18}
-              size={1}
-            />
+            {showCanvasGrid ? (
+              <Background
+                color={viewMode === "org" ? "rgba(49, 66, 245, 0.08)" : "#d8dde6"}
+                variant={BackgroundVariant.Dots}
+                gap={viewMode === "org" ? 28 : 18}
+                size={1}
+              />
+            ) : null}
           </ReactFlow>
         </div>
       </main>
+
+      {inspectorOpen && selectedPerson ? (
+        <PersonInspector
+          person={selectedPerson}
+          formState={formState}
+          directReports={selectedDirectReports}
+          canRemove={selectedPerson.id !== orgData.rootId}
+          onClose={() => setInspectorOpen(false)}
+          onRemove={deleteSelected}
+          onChange={applyForm}
+          onLevelChange={handleLevelInputChange}
+          onLevelBlur={commitLevelInput}
+          onSelectReport={selectPerson}
+        />
+      ) : null}
     </div>
+  );
+}
+
+function SidebarIcon({ name }: { name: SidebarPanel }) {
+  if (name === "files") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M5 3.75h9l5 5V20.25H5z" />
+        <path d="M14 3.75v5h5M8 13h8M8 16.5h6" />
+      </svg>
+    );
+  }
+  if (name === "find") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <circle cx="10.5" cy="10.5" r="5.75" />
+        <path d="m15 15 4.25 4.25" />
+      </svg>
+    );
+  }
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <rect x="3.5" y="3.5" width="6.5" height="6.5" />
+      <rect x="14" y="3.5" width="6.5" height="6.5" />
+      <rect x="3.5" y="14" width="6.5" height="6.5" />
+      <rect x="14" y="14" width="6.5" height="6.5" />
+    </svg>
+  );
+}
+
+function PersonInspector({
+  person,
+  formState,
+  directReports,
+  canRemove,
+  onClose,
+  onRemove,
+  onChange,
+  onLevelChange,
+  onLevelBlur,
+  onSelectReport
+}: {
+  person: PersonRecord;
+  formState: PersonFormState;
+  directReports: PersonRecord[];
+  canRemove: boolean;
+  onClose: () => void;
+  onRemove: () => void;
+  onChange: (form: PersonFormState) => void;
+  onLevelChange: (value: string) => void;
+  onLevelBlur: () => void;
+  onSelectReport: (personId: string) => void;
+}) {
+  return (
+    <>
+      <button className="inspector-scrim" aria-label="Close inspector" onClick={onClose} />
+      <aside className="person-inspector" role="dialog" aria-label={`Edit ${person.name}`}>
+        <div className="inspector-header">
+          <div>
+            <span className="inspector-kicker">Selected person</span>
+            <h2>Inspector</h2>
+          </div>
+          <button className="inspector-close" aria-label="Close inspector" onClick={onClose}>×</button>
+        </div>
+
+        <div className="inspector-profile">
+          <div className={`inspector-avatar role-${person.roleType}`}>{getInitials(person.name)}</div>
+          <div>
+            <h3>{person.name || "Unnamed person"}</h3>
+            <p>{person.title || "No title"}</p>
+          </div>
+          <span className={`inspector-status track-${person.managerOrIc.toLowerCase()}`}>{person.managerOrIc}</span>
+        </div>
+
+        <div className="inspector-form">
+          <label className="field-span-2">
+            <span>Full name</span>
+            <input value={formState.name} onChange={(event) => onChange({ ...formState, name: event.target.value })} />
+          </label>
+          <label className="field-span-2">
+            <span>Job title</span>
+            <input value={formState.title} onChange={(event) => onChange({ ...formState, title: event.target.value })} />
+          </label>
+          <label className="field-span-2">
+            <span>Role / function</span>
+            <input value={formState.role} onChange={(event) => onChange({ ...formState, role: event.target.value })} />
+          </label>
+          <label>
+            <span>Level</span>
+            <input value={formState.level} inputMode="numeric" onChange={(event) => onLevelChange(event.target.value)} onBlur={onLevelBlur} />
+          </label>
+          <label>
+            <span>Status</span>
+            <select value={formState.managerOrIc} onChange={(event) => onChange({ ...formState, managerOrIc: event.target.value as PersonFormState["managerOrIc"] })}>
+              <option value="Manager">Manager</option>
+              <option value="IC">IC</option>
+            </select>
+          </label>
+          <label className="field-span-2">
+            <span>Employment type</span>
+            <input value={formState.workerType} onChange={(event) => onChange({ ...formState, workerType: event.target.value })} />
+          </label>
+          <label className="field-span-2">
+            <span>Location</span>
+            <input value={formState.location} onChange={(event) => onChange({ ...formState, location: event.target.value })} />
+          </label>
+          <label className="field-span-2">
+            <span>Manager</span>
+            <input value={formState.managerName || "Top level"} readOnly />
+          </label>
+        </div>
+
+        <div className="inspector-reports">
+          <div className="section-title-row">
+            <h3>Direct reports</h3>
+            <span>{directReports.length}</span>
+          </div>
+          {directReports.length > 0 ? (
+            <div className="report-chip-list">
+              {directReports.map((report) => (
+                <button key={report.id} onClick={() => onSelectReport(report.id)}>
+                  <span>{getInitials(report.name)}</span>
+                  {report.name}
+                </button>
+              ))}
+            </div>
+          ) : <p className="muted">No direct reports.</p>}
+        </div>
+
+        <div className="inspector-footer">
+          <span>Changes save automatically</span>
+          {canRemove ? <button className="danger-link" onClick={onRemove}>Remove person</button> : null}
+        </div>
+      </aside>
+    </>
   );
 }
 

@@ -18,7 +18,8 @@ Single-page org chart editor built with React, TypeScript, Vite, and React Flow.
 - Explicit collapse/expand controls that do not trigger from normal card selection
 - Add leader action to insert a new root above the current top person
 - Search by name, role, title, manager/IC, level, worker type, or location
-- Side panel editing for the selected card
+- Contextual inspector editing when a person card is selected
+- Layered View, Files, and Find workspace navigation
 - Save and load JSON snapshots
 - Import `.xlsx`, `.xls`, and `.csv` roster files in-browser
 - Header summary with manager, IC, and open-role counts
@@ -62,7 +63,7 @@ npm run preview
 
 ## Importing Spreadsheet Data
 
-The app includes an `Import spreadsheet` button for non-technical users who prefer Excel or CSV over editing JSON manually.
+The app includes `Save Excel` and `Load Excel/CSV` buttons for non-technical users who prefer spreadsheets over editing JSON manually.
 
 Supported file types:
 
@@ -90,14 +91,17 @@ Import behavior:
 - if a manager name is not found in the file, that person is attached to the detected root
 - the app shows a preview summary before you load the imported org into the canvas
 
+`Save Excel` exports the current org using the same roster columns plus stable hierarchy metadata (`Role Type`, `ID`, `Parent ID`, `Sort Order`, and `Root`). Files exported by the app can be loaded back without losing reporting lines, card types, sibling order, or duplicate-name relationships.
+
 You can also download the converted JSON from that preview if you want a reusable saved file.
 
 ## Save / Load Format
 
-The app `Load` button expects a JSON file.
+The app `Load JSON` button expects a JSON file. Spreadsheet snapshots use `Load Excel/CSV` instead.
 
-Best option:
-- Use the app `Save` button, then later load that same file back with `Load`.
+Best options:
+- Use `Save JSON`, then later load that same file with `Load JSON`.
+- Use `Save Excel`, then later load that same file with `Load Excel/CSV`.
 
 Accepted shapes:
 
@@ -132,6 +136,7 @@ Behavior:
 - works with `Org view` and `Location view`
 - respects the current card density, so `Light view` exports as light view
 - respects the current expand/collapse state
+- respects the canvas grid setting; hiding the grid exports a completely white background
 - fits all currently rendered cards into frame before capture, regardless of the current on-screen pan/zoom
 - exports at 4800×2700 resolution for clearer text when zoomed or placed in presentations
 - hides canvas overlay controls from the exported image
@@ -221,7 +226,8 @@ then the default Vite config is usually fine.
 
 ## Interaction Notes
 
-- Click a card to edit it in the left panel.
+- Turn on `Edit details` before clicking a card when you want to open the Inspector; with it off, card clicks only select the person and highlight their reporting path.
+- Use the compact left navigation to open View settings, file controls, or search only when needed.
 - In `Org view`, selecting a card focuses the canvas around that person, their reporting chain, their peers, and their visible reports.
 - Lowest-level manager teams can remain open together for side-by-side comparison.
 - Clicking a person without direct reports selects them without moving their team; the parent team remains the layout focus.
@@ -229,9 +235,11 @@ then the default Vite config is usually fine.
 - Adding a person or leader preserves branches that are already expanded.
 - The initial hierarchy fits itself to the available canvas on desktop and mobile, while pan and zoom remain available afterward.
 - The top bar has separate `Add` controls for Person, Role, and Leader, plus structure controls for collapse/expand.
-- In `View mode`, the canvas is for browsing.
-- In `Drag edit`, left-drag edits cards and middle mouse drag pans the canvas.
+- Use the `View` / `Drag edit` segmented toggle in the chart header to switch interaction modes.
+- In `View`, the canvas is for browsing and cards cannot move.
+- In `Drag edit`, left-drag cards to edit reporting lines, left-drag empty canvas space to pan, or use middle mouse drag anywhere on the canvas.
 - In Org view, drag a person onto another visible card to update the reporting line; descendant loops and moving the root are blocked.
+- The nearest valid destination card receives a visible ring while dragging, and the ring remains briefly after a successful drop.
 - `Collapse selected` toggles only the selected branch; `Collapse all` closes expanded branches; `Expand all` expands the current focus context.
 - `Add leader` creates a new top-level leader and moves the previous root underneath that leader.
 - In Location view, dragging a person into another location column updates that person’s `location`.
