@@ -758,7 +758,7 @@ export const normalizeOrgData = (data: OrgData): OrgData => {
 
     const isManagerTrack = person.managerOrIc === "Manager";
     const normalizedRoleType =
-      person.roleType === "open-role" || person.name.trim().toLowerCase() === "open role"
+      person.name.trim().toLowerCase() === "open role"
         ? "open-role"
         : isManagerTrack
           ? "manager"
