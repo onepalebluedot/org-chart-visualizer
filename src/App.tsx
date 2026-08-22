@@ -96,61 +96,10 @@ const LOCATION_COLUMN_START_X = 120;
 const GRID_SIZE = 20;
 const EXPORT_WIDTH = 1600;
 const EXPORT_HEIGHT = 900;
-const EXPORT_PIXEL_RATIO = 3;
-
-const getCanvasBounds = (
-  nodes: AppNode[],
-  personCardWidth: number,
-  personCardHeight: number,
-  xPadding = 0,
-  yPadding = xPadding
-): { x: number; y: number; width: number; height: number } => {
-  if (nodes.length === 0) {
-    return {
-      x: -400,
-      y: -200,
-      width: 2000,
-      height: 1400
-    };
-  }
-
-  const bounds = nodes.reduce(
-    (acc, node) => {
-      const width =
-        typeof node.style?.width === "number"
-          ? node.style.width
-          : node.type === "project"
-            ? STANDARD_PERSON_CARD_WIDTH
-            : personCardWidth;
-      const height =
-        typeof node.style?.height === "number"
-          ? node.style.height
-          : node.type === "project"
-            ? GROUP_CARD_HEIGHT
-            : personCardHeight;
-
-      return {
-        minX: Math.min(acc.minX, node.position.x),
-        minY: Math.min(acc.minY, node.position.y),
-        maxX: Math.max(acc.maxX, node.position.x + width),
-        maxY: Math.max(acc.maxY, node.position.y + height)
-      };
-    },
-    {
-      minX: Number.POSITIVE_INFINITY,
-      minY: Number.POSITIVE_INFINITY,
-      maxX: Number.NEGATIVE_INFINITY,
-      maxY: Number.NEGATIVE_INFINITY
-    }
-  );
-
-  return {
-    x: bounds.minX - xPadding,
-    y: bounds.minY - yPadding,
-    width: bounds.maxX - bounds.minX + xPadding * 2,
-    height: bounds.maxY - bounds.minY + yPadding + xPadding
-  };
-};
+const EXPORT_PIXEL_RATIO = 4;
+const EXPORT_MIN_ZOOM = 0.02;
+const EXPORT_PADDING_X = 180;
+const EXPORT_PADDING_Y = 150;
 
 export default function App() {
   const [orgData, setOrgData] = useState<OrgData>(normalizeOrgData(mockOrgData));
@@ -620,20 +569,20 @@ export default function App() {
       const { toPng } = await import("html-to-image");
       await waitForNextPaint();
 
-      const exportBounds = getCanvasBounds(
-        renderedNodes,
-        personCardWidth,
-        personCardHeight,
-        140,
-        120
-      );
+      const measuredBounds = instance.getNodesBounds(renderedNodes.map((node) => node.id));
+      const exportBounds = {
+        x: measuredBounds.x - EXPORT_PADDING_X,
+        y: measuredBounds.y - EXPORT_PADDING_Y,
+        width: measuredBounds.width + EXPORT_PADDING_X * 2,
+        height: measuredBounds.height + EXPORT_PADDING_Y * 2
+      };
       const exportViewport = getViewportForBounds(
         exportBounds,
         EXPORT_WIDTH,
         EXPORT_HEIGHT,
-        0.25,
+        EXPORT_MIN_ZOOM,
         1.4,
-        0.02
+        0
       );
 
       await instance.setViewport(exportViewport, { duration: 0 });
@@ -659,7 +608,7 @@ export default function App() {
 
       setPrintMessage({
         tone: "success",
-        text: "High-resolution landscape image exported."
+        text: "Full-chart 6400×3600 landscape image exported."
       });
     } catch (error) {
       setPrintMessage({
@@ -1352,10 +1301,14 @@ export default function App() {
             onNodeClick={(_, node) => handleNodeSelection(node)}
             onNodeDrag={isDragEditing ? (viewMode === "org" ? onOrgNodeDrag : onLocationNodeDrag) : undefined}
             onNodeDragStop={isDragEditing ? (viewMode === "org" ? onOrgNodeDragStop : onLocationNodeDragStop) : undefined}
-            minZoom={0.25}
+            minZoom={isPrinting ? EXPORT_MIN_ZOOM : 0.25}
             maxZoom={1.5}
             fitView
-            fitViewOptions={{ padding: isMobileLayout ? 0.18 : 0.12, minZoom: 0.25, maxZoom: 1 }}
+            fitViewOptions={{
+              padding: isMobileLayout ? 0.18 : 0.12,
+              minZoom: isPrinting ? EXPORT_MIN_ZOOM : 0.25,
+              maxZoom: 1
+            }}
             snapToGrid
             snapGrid={[GRID_SIZE, GRID_SIZE]}
             nodesDraggable={isDragEditing}

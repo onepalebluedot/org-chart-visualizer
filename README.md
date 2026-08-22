@@ -138,7 +138,7 @@ Behavior:
 - respects the current expand/collapse state
 - respects the canvas grid setting; hiding the grid exports a completely white background
 - fits all currently rendered cards into frame before capture, regardless of the current on-screen pan/zoom
-- exports at 4800×2700 resolution for clearer text when zoomed or placed in presentations
+- exports at 6400×3600 resolution for clearer text when zoomed or placed in presentations
 - hides canvas overlay controls from the exported image
 - restores your previous zoom/pan after export
 
