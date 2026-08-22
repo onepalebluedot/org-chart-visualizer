@@ -43,8 +43,10 @@ const roleLabels: Record<RoleType, string> = {
   "open-role": "Open role"
 };
 
+const isOpenRoleName = (name: string): boolean => name.trim().toLowerCase() === "open role";
+
 const getInitials = (name: string): string => {
-  if (name.toLowerCase() === "open role") return "+";
+  if (isOpenRoleName(name)) return "+";
   const parts = name.trim().split(/\s+/).filter(Boolean);
   return (parts[0]?.[0] ?? "").concat(parts[1]?.[0] ?? "").toUpperCase() || "?";
 };
@@ -405,6 +407,13 @@ export default function App() {
   const applyForm = (nextForm: PersonFormState) => {
     if (!selectedPerson) return;
     setFormState(nextForm);
+    const roleType: RoleType = isOpenRoleName(nextForm.name)
+      ? "open-role"
+      : nextForm.managerOrIc === "Manager"
+        ? selectedPerson.id === orgData.rootId
+          ? "executive"
+          : "manager"
+        : "ic";
     updatePerson(selectedPerson.id, {
       name: nextForm.name,
       role: nextForm.role,
@@ -413,6 +422,7 @@ export default function App() {
       title: nextForm.title,
       managerName: nextForm.managerName,
       location: nextForm.location,
+      roleType
     });
   };
 
@@ -1484,6 +1494,14 @@ function PersonInspector({
   onLevelBlur: () => void;
   onSelectReport: (personId: string) => void;
 }) {
+  const inspectorRoleType: RoleType = isOpenRoleName(person.name)
+    ? "open-role"
+    : person.roleType === "executive"
+      ? "executive"
+      : person.managerOrIc === "Manager"
+        ? "manager"
+        : "ic";
+
   return (
     <>
       <button className="inspector-scrim" aria-label="Close inspector" onClick={onClose} />
@@ -1497,7 +1515,7 @@ function PersonInspector({
         </div>
 
         <div className="inspector-profile">
-          <div className={`inspector-avatar role-${person.roleType}`}>{getInitials(person.name)}</div>
+          <div className={`inspector-avatar role-${inspectorRoleType}`}>{getInitials(person.name)}</div>
           <div>
             <h3>{person.name || "Unnamed person"}</h3>
             <p>{person.title || "No title"}</p>
@@ -1617,10 +1635,18 @@ function PersonNode({ data }: { data: OrgNodeData }) {
     viewMode,
     lightMode
   } = data;
+  const isOpenRolePlaceholder = isOpenRoleName(person.name);
+  const visualRoleType: RoleType = isOpenRolePlaceholder
+    ? "open-role"
+    : person.roleType === "executive"
+      ? "executive"
+      : person.managerOrIc === "Manager"
+        ? "manager"
+        : "ic";
   const roleToneClass = `tone-${person.role.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
   const cardClasses = [
     "person-card",
-    `role-${person.roleType}`,
+    `role-${visualRoleType}`,
     selected ? "is-selected" : "",
     collapsed ? "is-collapsed" : "",
     isFocusGroup ? "is-focus-open" : "",
@@ -1642,7 +1668,14 @@ function PersonNode({ data }: { data: OrgNodeData }) {
           <Handle id="report-source-bottom" type="source" position={Position.Bottom} className="reporting-handle" />
         </>
       ) : null}
-      {!lightMode && viewMode === "org" ? <div className="card-avatar" aria-hidden="true">{getInitials(person.name)}</div> : null}
+      {!lightMode && viewMode === "org" ? (
+        <div
+          className={`card-avatar ${isOpenRolePlaceholder ? "is-open-role-placeholder" : "is-filled-person"}`}
+          aria-hidden="true"
+        >
+          {getInitials(person.name)}
+        </div>
+      ) : null}
       {!lightMode ? (
         <>
           <div className="card-topline">

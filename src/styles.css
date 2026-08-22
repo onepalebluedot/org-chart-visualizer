@@ -727,10 +727,16 @@ h2 {
   box-shadow: 0 8px 18px rgba(34, 45, 108, 0.18);
 }
 
-.canvas-frame.is-org-view .person-card.role-open-role .card-avatar {
+.card-avatar.is-open-role-placeholder {
   background:
     radial-gradient(circle at 32% 28%, rgba(255, 255, 255, 0.86), transparent 28%),
     linear-gradient(135deg, #f7dcc0, #f4f1e7);
+}
+
+.card-avatar.is-filled-person {
+  background:
+    radial-gradient(circle at 32% 28%, rgba(255, 255, 255, 0.78), transparent 28%),
+    linear-gradient(135deg, #f8c65d, #7fc8ff);
 }
 
 .person-card:hover {
